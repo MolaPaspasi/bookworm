@@ -13,6 +13,8 @@ const PORT = process.env.PORT || 3000;
 
 job.start();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
 app.use(cors());
 
 app.use("/api/auth", authRoutes);

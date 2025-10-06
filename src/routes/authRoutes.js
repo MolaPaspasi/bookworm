@@ -10,6 +10,8 @@ const generateToken = (userId) => {
 
 router.post("/register", async (req, res) => {
   try {
+        console.log("REQ BODY:", req.body);   // 🔎 Buraya ekle
+
     const { email, username, password } = req.body  ;
 
     if (!username || !email || !password) {
@@ -68,6 +70,7 @@ router.post("/register", async (req, res) => {
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
+    console.log("REQ BODY:", req.body);   // 🔎 Buraya ekle
 
     if (!email || !password) return res.status(400).json({ message: "All fields are required" });
 
