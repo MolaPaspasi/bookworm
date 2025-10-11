@@ -111,18 +111,21 @@ router.get("/", protectRoute, async (req, res) => {
   }
 });
 
-// Get foods by company (for company dashboard)
+// Get packages by company (for company dashboard)
 router.get("/company", protectRoute, async (req, res) => {
   try {
+    console.log("Headers:", req.headers); // Log headers for debugging
+    console.log("User:", req.user); // Log user details for debugging
+
     if (req.user.role !== "company") {
       return res.status(403).json({ message: "Only companies can access this route" });
     }
 
-    const foods = await Food.find({ company: req.user._id })
+    const packages = await Package.find({ company: req.user._id })
       .sort({ createdAt: -1 });
-    res.json(foods);
+    res.json(packages);
   } catch (error) {
-    console.error("Get company foods error:", error.message);
+    console.error("Get company packages error:", error.message);
     res.status(500).json({ message: "Server error" });
   }
 });

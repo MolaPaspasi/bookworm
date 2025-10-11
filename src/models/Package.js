@@ -33,8 +33,8 @@ const packageSchema = new mongoose.Schema(
     packageType: {
       type: String,
       required: true,
-      enum: ["mystery", "themed", "surprise", "seasonal", "custom"],
-      default: "mystery",
+      enum: ["mystery", "food"],
+      
     },
     // Dietary preferences this package caters to
     dietaryTypes: [{
