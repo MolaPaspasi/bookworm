@@ -10,9 +10,7 @@ const generateToken = (userId) => {
 
 router.post("/register", async (req, res) => {
   try {
-         // 🔎 Buraya ekle
-
-    const { email, username, password } = req.body  ;
+    const { email, username, password, role, companyName, companyAddress } = req.body;
 
     if (!username || !email || !password) {
       return res.status(400).json({ message: "All fields are required" });
@@ -24,6 +22,22 @@ router.post("/register", async (req, res) => {
 
     if (username.length < 3) {
       return res.status(400).json({ message: "Username should be at least 3 characters long" });
+    }
+
+    // Validate role
+    const validRoles = ["customer", "company"];
+    const userRole = role || "customer";
+    if (!validRoles.includes(userRole)) {
+      return res.status(400).json({ message: "Invalid role. Must be 'customer' or 'company'" });
+    }
+
+    // If role is company, companyName and companyAddress are required
+    if (userRole === "company" && !companyName) {
+      return res.status(400).json({ message: "Company name is required for company accounts" });
+    }
+    
+    if (userRole === "company" && !companyAddress) {
+      return res.status(400).json({ message: "Company address is required for company accounts" });
     }
 
     // check if user already exists
@@ -40,26 +54,46 @@ router.post("/register", async (req, res) => {
     // get random avatar
     const profileImage = `https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`;
 
-    const user = new User({
+    // Create user object with role and company fields
+    const userData = {
       email,
       username,
       password,
       profileImage,
-    });
+      role: userRole,
+    };
+
+    // Add company-specific fields if role is company
+    if (userRole === "company") {
+      userData.companyName = companyName;
+      userData.companyAddress = companyAddress || "";
+    }
+
+    const user = new User(userData);
 
     await user.save();
 
     const token = generateToken(user._id);
 
+    // Prepare response user object
+    const responseUser = {
+      id: user._id,
+      username: user.username,
+      email: user.email,
+      profileImage: user.profileImage,
+      role: user.role,
+      createdAt: user.createdAt,
+    };
+
+    // Add company fields to response if role is company
+    if (user.role === "company") {
+      responseUser.companyName = user.companyName;
+      responseUser.companyAddress = user.companyAddress;
+    }
+
     res.status(201).json({
       token,
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        profileImage: user.profileImage,
-        createdAt: user.createdAt,
-      },
+      user: responseUser,
     });
   } catch (error) {
     console.log("Error in register route", error);
@@ -83,18 +117,64 @@ router.post("/login", async (req, res) => {
 
     const token = generateToken(user._id);
 
+    // Prepare response user object
+    const responseUser = {
+      id: user._id,
+      username: user.username,
+      email: user.email,
+      profileImage: user.profileImage,
+      role: user.role,
+      createdAt: user.createdAt,
+    };
+
+    // Add company fields to response if role is company
+    if (user.role === "company") {
+      responseUser.companyName = user.companyName;
+      responseUser.companyAddress = user.companyAddress;
+    }
+
     res.status(200).json({
       token,
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        profileImage: user.profileImage,
-        createdAt: user.createdAt,
-      },
+      user: responseUser,
     });
   } catch (error) {
     console.log("Error in login route", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// Add or remove favorite restaurant
+router.post("/favorites", protectRoute, async (req, res) => {
+  try {
+    if (req.user.role !== "customer") {
+      return res.status(403).json({ message: "Only customers can manage favorite restaurants" });
+    }
+
+    const { restaurantId } = req.body;
+
+    if (!restaurantId) {
+      return res.status(400).json({ message: "Restaurant ID is required" });
+    }
+
+    const restaurant = await User.findById(restaurantId);
+    if (!restaurant || restaurant.role !== "company") {
+      return res.status(404).json({ message: "Restaurant not found" });
+    }
+
+    const isFavorite = req.user.favoriteRestaurants.includes(restaurantId);
+
+    if (isFavorite) {
+      req.user.favoriteRestaurants = req.user.favoriteRestaurants.filter(
+        id => id.toString() !== restaurantId
+      );
+    } else {
+      req.user.favoriteRestaurants.push(restaurantId);
+    }
+
+    await req.user.save();
+    res.json({ favoriteRestaurants: req.user.favoriteRestaurants });
+  } catch (error) {
+    console.error("Error managing favorite restaurants", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
