@@ -3,7 +3,6 @@ import cloudinary from "../lib/cloudinary.js";
 import Package from "../models/Package.js";
 import Rating from "../models/Rating.js";
 import Food from "../models/Food.js";
-import { sortPackagesByDistance } from "../lib/distance.js";
 import protectRoute from "../middleware/auth.middleware.js";
 
 const router = express.Router();
@@ -60,7 +59,7 @@ router.post("/", protectRoute, async (req, res) => {
     await newPackage.save();
 
     // Populate company info
-    await newPackage.populate("company", "username companyName companyAddress location");
+    await newPackage.populate("company", "username companyName companyAddress");
 
     res.status(201).json(newPackage);
   } catch (error) {
@@ -69,7 +68,7 @@ router.post("/", protectRoute, async (req, res) => {
   }
 });
 
-// Get all packages with distance-based sorting
+// Get all packages
 router.get("/", protectRoute, async (req, res) => {
   try {
     const page = req.query.page || 1;
@@ -77,8 +76,6 @@ router.get("/", protectRoute, async (req, res) => {
     const skip = (page - 1) * limit;
     const packageType = req.query.packageType;
     const search = req.query.search;
-    const customerLat = parseFloat(req.query.lat);
-    const customerLon = parseFloat(req.query.lon);
 
     // Build query
     let query = { isAvailable: true };
@@ -98,18 +95,12 @@ router.get("/", protectRoute, async (req, res) => {
       .sort({ averageRating: -1, createdAt: -1 })
       .skip(skip)
       .limit(limit)
-      .populate("company", "username companyName companyAddress location profileImage");
-
-    // Sort by distance if customer location is provided
-    let sortedPackages = packages;
-    if (customerLat && customerLon) {
-      sortedPackages = sortPackagesByDistance(packages, customerLat, customerLon);
-    }
+      .populate("company", "username companyName companyAddress");
 
     const totalPackages = await Package.countDocuments(query);
 
     res.json({
-      packages: sortedPackages,
+      packages,
       currentPage: page,
       totalPackages,
       totalPages: Math.ceil(totalPackages / limit),

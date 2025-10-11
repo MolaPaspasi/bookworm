@@ -41,27 +41,6 @@ const userSchema = new mongoose.Schema(
         return this.role === "company";
       },
     },
-    // Location coordinates for distance calculation
-    location: {
-      type: {
-        type: String,
-        enum: ['Point'],
-        default: 'Point',
-      },
-      coordinates: {
-        type: [Number], // [longitude, latitude]
-      },
-    },
-    // Customer's current location (optional, for sorting)
-    currentLocation: {
-      type: {
-        type: String,
-        enum: ['Point'],
-      },
-      coordinates: {
-        type: [Number], // [longitude, latitude]
-      },
-    },
     favoriteRestaurants: [
       {
         type: mongoose.Schema.Types.ObjectId,
@@ -71,10 +50,6 @@ const userSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
-
-// Add geospatial index for location queries
-userSchema.index({ location: '2dsphere' });
-userSchema.index({ currentLocation: '2dsphere' });
 
 // hash password before saving user to db
 userSchema.pre("save", async function (next) {
