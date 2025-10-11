@@ -5,7 +5,7 @@ import job from "./lib/cron.js";
 
 import authRoutes from "./routes/authRoutes.js";
 import foodRoutes from "./routes/foodRoutes.js";
-import packageRoutes from "./routes/packageRoutes.js"; // Import the package routes
+import packageRoutes from "./routes/packageRoutes.js";
 
 import { connectDB } from "./lib/db.js";
 
