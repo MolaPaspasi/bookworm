@@ -145,6 +145,7 @@ router.post("/login", async (req, res) => {
 });
 
 // Add or remove favorite restaurant
+// Get all favorite restaurants for the logged-in customer
 router.post("/favorites", protectRoute, async (req, res) => {
   try {
     if (req.user.role !== "customer") {
@@ -152,7 +153,6 @@ router.post("/favorites", protectRoute, async (req, res) => {
     }
 
     const { restaurantId } = req.body;
-
     if (!restaurantId) {
       return res.status(400).json({ message: "Restaurant ID is required" });
     }
@@ -173,11 +173,35 @@ router.post("/favorites", protectRoute, async (req, res) => {
     }
 
     await req.user.save();
-    res.json({ favoriteRestaurants: req.user.favoriteRestaurants });
+
+    // Optional: Populate for immediate frontend data
+    const updatedUser = await User.findById(req.user._id)
+      .populate("favoriteRestaurants", "companyName companyImage _id");
+
+    res.json({ favoriteRestaurants: updatedUser.favoriteRestaurants });
   } catch (error) {
-    console.error("Error managing favorite restaurants", error);
+    console.error("Error managing favorite restaurants:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
+// 🔹 Get all favorite restaurants
+router.get("/favorites", protectRoute, async (req, res) => {
+  try {
+    if (req.user.role !== "customer") {
+      return res.status(403).json({ message: "Only customers can view favorites" });
+    }
+
+    const user = await User.findById(req.user._id).populate(
+      "favoriteRestaurants",
+      "companyName companyImage _id"
+    );
+
+    res.json({ favoriteRestaurants: user.favoriteRestaurants });
+  } catch (error) {
+    console.error("Error fetching favorites:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
 
 export default router;
