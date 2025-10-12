@@ -5,7 +5,16 @@ const ratingSchema = new mongoose.Schema(
     food: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Food",
-      required: true,
+      required: function () {
+        return !this.package;
+      },
+    },
+    package: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Package",
+      required: function () {
+        return !this.food;
+      },
     },
     customer: {
       type: mongoose.Schema.Types.ObjectId,
@@ -26,11 +35,19 @@ const ratingSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Ensure one rating per customer per food
-ratingSchema.index({ food: 1, customer: 1 }, { unique: true });
+// Ensure one rating per customer per item type
+ratingSchema.index(
+  { food: 1, customer: 1 },
+  { unique: true, partialFilterExpression: { food: { $exists: true } } }
+);
+ratingSchema.index(
+  { package: 1, customer: 1 },
+  { unique: true, partialFilterExpression: { package: { $exists: true } } }
+);
 
 // Add indexes for better performance
 ratingSchema.index({ food: 1 });
+ratingSchema.index({ package: 1 });
 ratingSchema.index({ customer: 1 });
 ratingSchema.index({ rating: 1 });
 

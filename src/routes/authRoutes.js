@@ -13,8 +13,15 @@ router.post("/register", async (req, res) => {
   try {
     const { email, username, password, role, companyName, companyAddress } = req.body;
 
-    if (!username || !email || !password) {
+    // Normalize email by trimming whitespace and lowering case
+    const cleanEmail = email?.trim().toLowerCase();
+
+    if (!username || !cleanEmail || !password) {
       return res.status(400).json({ message: "All fields are required" });
+    }
+
+    if (/\s/.test(cleanEmail)) {
+      return res.status(400).json({ message: "Email cannot contain spaces" });
     }
 
     if (password.length < 6) {
@@ -25,58 +32,55 @@ router.post("/register", async (req, res) => {
       return res.status(400).json({ message: "Username should be at least 3 characters long" });
     }
 
-    // Validate role
+    // ✅ Role kontrolü
     const validRoles = ["customer", "company"];
     const userRole = role || "customer";
     if (!validRoles.includes(userRole)) {
       return res.status(400).json({ message: "Invalid role. Must be 'customer' or 'company'" });
     }
 
-    // If role is company, companyName and companyAddress are required
+    // 🏢 Şirket kullanıcıları için zorunlu alanlar
     if (userRole === "company" && !companyName) {
       return res.status(400).json({ message: "Company name is required for company accounts" });
     }
-    
     if (userRole === "company" && !companyAddress) {
       return res.status(400).json({ message: "Company address is required for company accounts" });
     }
 
-    // check if user already exists
-    const existingEmail = await User.findOne({ email });
+    // 📧 Email kontrolü
+    const existingEmail = await User.findOne({ email: cleanEmail });
     if (existingEmail) {
       return res.status(400).json({ message: "Email already exists" });
     }
 
+    // 👤 Username kontrolü
     const existingUsername = await User.findOne({ username });
     if (existingUsername) {
       return res.status(400).json({ message: "Username already exists" });
     }
 
-    // get random avatar
+    // 🖼️ Random profil resmi
     const profileImage = `https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`;
 
-    // Create user object with role and company fields
+    // 🧾 Kullanıcı objesi
     const userData = {
-      email,
+      email: cleanEmail, // ✅ Temizlenmiş email burada
       username,
       password,
       profileImage,
       role: userRole,
     };
 
-    // Add company-specific fields if role is company
     if (userRole === "company") {
       userData.companyName = companyName;
       userData.companyAddress = companyAddress || "";
     }
 
     const user = new User(userData);
-
     await user.save();
 
     const token = generateToken(user._id);
 
-    // Prepare response user object
     const responseUser = {
       id: user._id,
       username: user.username,
@@ -86,7 +90,6 @@ router.post("/register", async (req, res) => {
       createdAt: user.createdAt,
     };
 
-    // Add company fields to response if role is company
     if (user.role === "company") {
       responseUser.companyName = user.companyName;
       responseUser.companyAddress = user.companyAddress;
@@ -97,19 +100,28 @@ router.post("/register", async (req, res) => {
       user: responseUser,
     });
   } catch (error) {
-    console.log("Error in register route", error);
+    console.error("Error in register route", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
+
 
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    if (!email || !password) return res.status(400).json({ message: "All fields are required" });
+    const cleanEmail = email?.trim().toLowerCase();
+
+    if (!cleanEmail || !password) {
+      return res.status(400).json({ message: "All fields are required" });
+    }
+
+    if (/\s/.test(cleanEmail)) {
+      return res.status(400).json({ message: "Email cannot contain spaces" });
+    }
 
     // check if user exists
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email: cleanEmail });
     if (!user) return res.status(400).json({ message: "Invalid credentials" });
 
     // check if password is correct

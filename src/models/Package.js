@@ -46,11 +46,6 @@ const packageSchema = new mongoose.Schema(
       type: Number,
       min: 0,
     },
-    // Preparation time for the entire package
-    preparationTime: {
-      type: Number, // in minutes
-      default: 30,
-    },
     // Company that owns this package
     company: {
       type: mongoose.Schema.Types.ObjectId,
@@ -77,8 +72,8 @@ const packageSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Add indexes for better performance
-packageSchema.index({ company: 1 });
+// Add indexes for better performance and uniqueness per company
+packageSchema.index({ company: 1 }, { unique: true });
 packageSchema.index({ packageType: 1 });
 packageSchema.index({ averageRating: -1 });
 packageSchema.index({ createdAt: -1 });
