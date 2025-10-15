@@ -87,56 +87,6 @@ router.get("/company", protectRoute, async (req, res) => {
 });
 
 /* =========================================================================
-   ⚠️ GET ALLERGEN INFO
-   ========================================================================= */
-router.get("/allergens", protectRoute, async (req, res) => {
-  try {
-    const foods = await Food.find({ isAvailable: true })
-      .populate("company", "username companyName");
-
-    const result = foods.map(food => ({
-      name: food.name,
-      description: food.description,
-      allergens: food.allergens,
-      company: food.company,
-    }));
-
-    res.json(result);
-  } catch (error) {
-    console.error("Error fetching food items", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-});
-
-/* =========================================================================
-   🔍 GET SINGLE PACKAGE (DETAIL VIEW)
-   ========================================================================= */
-router.get("/:id", protectRoute, async (req, res) => {
-  try {
-    const pack = await Package.findById(req.params.id).populate(
-      "company",
-      "username companyName companyAddress"
-    );
-
-    if (!pack) {
-      return res.status(404).json({ message: "Package not found" });
-    }
-
-    const ratings = await Rating.find({ package: req.params.id })
-      .populate("customer", "username profileImage")
-      .sort({ createdAt: -1 });
-
-    const response = pack.toObject({ virtuals: true });
-    response.ratings = ratings;
-
-    res.json(response);
-  } catch (error) {
-    console.error("Error fetching package detail:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-});
-
-/* =========================================================================
    ➕ CREATE PACKAGE (ONLY COMPANY)
    ========================================================================= */
 router.post("/", protectRoute, async (req, res) => {
@@ -302,6 +252,48 @@ router.get("/:id/ratings", protectRoute, async (req, res) => {
     res.json(ratings);
   } catch (error) {
     console.error("Error getting ratings", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+/* =========================================================================
+   ⚠️ GET ALLERGEN INFO
+   ========================================================================= */
+router.get("/allergens", protectRoute, async (req, res) => {
+  try {
+    const foods = await Food.find({ isAvailable: true })
+      .populate("company", "username companyName");
+
+    const result = foods.map(food => ({
+      name: food.name,
+      description: food.description,
+      allergens: food.allergens,
+      company: food.company,
+    }));
+
+    res.json(result);
+  } catch (error) {
+    console.error("Error fetching food items", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+// 🧾 GET SINGLE PACKAGE DETAILS
+router.get("/:id", protectRoute, async (req, res) => {
+  try {
+    const pack = await Package.findById(req.params.id)
+      .populate("company", "username companyName companyAddress profileImage");
+
+    if (!pack)
+      return res.status(404).json({ message: "Package not found" });
+
+    // Yorumları (ratings) getir
+    const ratings = await Rating.find({ package: req.params.id })
+      .populate("customer", "username profileImage")
+      .sort({ createdAt: -1 });
+
+    res.json({ package: pack, ratings });
+  } catch (error) {
+    console.error("Error fetching package details:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
