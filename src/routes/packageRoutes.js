@@ -144,9 +144,18 @@ router.put("/:id", protectRoute, async (req, res) => {
     }
 
     const { id } = req.params;
+    const { itemType } = req.body;
 
-    let item = await Package.findById(id);
-    if (!item) item = await Food.findById(id);
+    let item = null;
+    if (itemType === "food") {
+      item = await Food.findById(id);
+    } else if (itemType === "mystery") {
+      item = await Package.findById(id);
+    } else {
+      // Eğer gönderilmemişse her iki modelde dene (eski client'lar için)
+      item = await Package.findById(id);
+      if (!item) item = await Food.findById(id);
+    }
 
     if (!item) return res.status(404).json({ message: "Item not found" });
     if (item.company.toString() !== req.user._id.toString()) {
@@ -161,7 +170,6 @@ router.put("/:id", protectRoute, async (req, res) => {
     }
 
     const Model = item.itemType === "food" ? Food : Package;
-
     const updated = await Model.findByIdAndUpdate(id, update, { new: true })
       .populate("company", "username companyName companyAddress");
 
