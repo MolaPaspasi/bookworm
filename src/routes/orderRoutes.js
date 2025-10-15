@@ -4,6 +4,7 @@ import Order from "../models/Order.js";
 import { generateHashedCode, isValidCode } from "../utils/rotatingCode.js";
 
 const router = express.Router();
+const HISTORY_STATUSES = ["picked", "completed"];
 
 /* =========================================================================
    🧾 CREATE ORDER (CUSTOMER)
@@ -64,6 +65,27 @@ router.get("/my", protectRoute, async (req, res) => {
   }
 });
 
+router.get("/my/history", protectRoute, async (req, res) => {
+  try {
+    if (req.user.role !== "customer") {
+      return res.status(403).json({ message: "Only customers can view their history" });
+    }
+
+    const orders = await Order.find({
+      customer: req.user._id,
+      status: { $in: HISTORY_STATUSES },
+    })
+      .sort({ createdAt: -1 })
+      .populate("company", "companyName username email")
+      .populate("items.package", "name price");
+
+    res.json(orders);
+  } catch (err) {
+    console.error("Fetch customer history error:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
 /* =========================================================================
    🏢 GET COMPANY ORDERS
    ========================================================================= */
@@ -80,6 +102,27 @@ router.get("/company", protectRoute, async (req, res) => {
     res.json(orders);
   } catch (err) {
     console.error("Fetch company orders error:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+router.get("/company/history", protectRoute, async (req, res) => {
+  try {
+    if (req.user.role !== "company") {
+      return res.status(403).json({ message: "Only companies can view their history" });
+    }
+
+    const orders = await Order.find({
+      company: req.user._id,
+      status: { $in: HISTORY_STATUSES },
+    })
+      .sort({ createdAt: -1 })
+      .populate("customer", "username email")
+      .populate("items.package", "name price");
+
+    res.json(orders);
+  } catch (err) {
+    console.error("Fetch company history error:", err);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -111,6 +154,30 @@ router.post("/:id/refresh-code", protectRoute, async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
+/* =========================================================================
+   🕓 GET COMPANY PICKED ORDERS (HISTORY)
+   ========================================================================= */
+router.get("/company/history", protectRoute, async (req, res) => {
+  try {
+    if (req.user.role !== "company") {
+      return res.status(403).json({ message: "Only companies can view history" });
+    }
+
+    const orders = await Order.find({
+      company: req.user._id,
+      status: "picked", // ✅ sadece teslim edilmiş (picked) siparişleri getir
+    })
+      .populate("customer", "username email")
+      .populate("items.package", "name price")
+      .sort({ createdAt: -1 }); // son sipariş en üstte
+
+    res.json(orders);
+  } catch (err) {
+    console.error("Fetch company picked orders error:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
 
 /* =========================================================================
    ✅ VERIFY CODE (COMPANY ONLY)
@@ -127,7 +194,7 @@ router.post("/:id/verify-code", protectRoute, async (req, res) => {
     const { code } = req.body;
     if (!code) return res.status(400).json({ message: "Code required" });
 
-    const expired = Date.now() - new Date(order.codeGeneratedAt).getTime() > 10000;
+    const expired = Date.now() - new Date(order.codeGeneratedAt).getTime() > 20000;
     if (expired) return res.status(400).json({ message: "Code expired. Wait for next rotation." });
 
     const valid = await isValidCode(code, order.pickupCodeHash);

@@ -22,5 +22,5 @@ export const startCodeRotation = () => {
     } catch (err) {
       console.error("Code rotation error:", err.message);
     }
-  }, 10000);
+  }, 20000);
 };
