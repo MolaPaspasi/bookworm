@@ -273,5 +273,28 @@ router.post("/:id/verify-code", protectRoute, async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
+// ✅ get current pickup code (customer only)
+router.get("/:id/code", protectRoute, async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ message: "Order not found" });
+    if (req.user.role !== "customer" || String(order.customer) !== String(req.user._id))
+      return res.status(403).json({ message: "Not authorized" });
+
+    const expired = Date.now() - new Date(order.codeGeneratedAt).getTime() > 20000;
+    if (expired) {
+      const { plain, hash } = await generateHashedCode();
+      order.pickupCodeHash = hash;
+      order.codeGeneratedAt = new Date();
+      await order.save();
+      return res.json({ pickupCode: plain });
+    }
+
+    res.json({ pickupCode: "••••••" }); // veya hashed'ten değil, plaintext'ten dön
+  } catch (err) {
+    console.error("Code fetch error:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 
 export default router;

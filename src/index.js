@@ -8,6 +8,7 @@ import authRoutes from "./routes/authRoutes.js";
 import packageRoutes from "./routes/packageRoutes.js";
 import { connectDB } from "./lib/db.js";
 import { startCodeRotation } from "./services/codeRotationService.js";
+import foodRoutes from "./routes/foodRoutes.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -21,6 +22,8 @@ app.use("/api/auth", authRoutes);
 app.use("/api/packages", packageRoutes); // Register the packages route
 app.use("/api/payment", paymentRoutes); // Register the foods route
 app.use("/api/orders", orderRoutes); // Register the orders route
+app.use("/api/foods", foodRoutes);
+
 startCodeRotation();
 
 app.listen(PORT, () => {

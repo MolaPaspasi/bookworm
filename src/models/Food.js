@@ -2,69 +2,26 @@ import mongoose from "mongoose";
 
 const foodSchema = new mongoose.Schema(
   {
-    name: {
-      type: String,
-      required: true,
-    },
-    description: {
-      type: String,
-      required: true,
-    },
-    image: {
-      type: String,
-      default: "",
-    },
-    price: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
-    category: {
-      type: String,
-      required: true,
-      enum: ["appetizer", "main-course", "dessert", "beverage", "salad", "soup", "pizza", "burger", "pasta", "other"],
-    },
-    ingredients: [{
-      type: String,
-    }],
-    allergens: [{
-      type: String,
-    }],
-    isAvailable: {
-      type: Boolean,
-      default: true,
-    },
-    isMystery: {
-      type: Boolean,
-      default: false,
-    },
-    // Company that owns this food
+    name: { type: String, required: true },
+    description: { type: String, default: "" },
+    image: { type: String, default: "" },
+
+    originalPrice: { type: Number, required: true, min: 0 },
+    discountedPrice: { type: Number, required: true, min: 0 },
+    stock: { type: Number, required: true, default: 0 },
+    allergens: [String],
+
+    dietaryTypes: [String],
     company: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
     },
-    // Overall rating (calculated from individual ratings)
-    averageRating: {
-      type: Number,
-      default: 0,
-      min: 0,
-      max: 5,
-    },
-    // Number of ratings received
-    ratingCount: {
-      type: Number,
-      default: 0,
-    },
+    averageRating: { type: Number, default: 0 },
+    ratingCount: { type: Number, default: 0 },
+    isAvailable: { type: Boolean, default: true },
   },
   { timestamps: true }
 );
 
-// Add indexes for better performance
-foodSchema.index({ company: 1 });
-foodSchema.index({ category: 1 });
-foodSchema.index({ averageRating: -1 });
-
-const Food = mongoose.model("Food", foodSchema);
-
-export default Food;
+export default mongoose.model("Food", foodSchema);

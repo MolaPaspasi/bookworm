@@ -1,4 +1,3 @@
-// src/routes/foodRoutes.js
 import express from "express";
 import cloudinary from "../lib/cloudinary.js";
 import Food from "../models/Food.js";
@@ -6,7 +5,10 @@ import protectRoute from "../middleware/auth.middleware.js";
 
 const router = express.Router();
 
-/* 🍽️ GET FOODS (customers see all foods, optional company filter) */
+/* =========================================================================
+   🍽️ GET FOODS (public for logged users)
+   Supports: ?page, ?limit, ?company, ?search
+   ========================================================================= */
 router.get("/", protectRoute, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -44,11 +46,14 @@ router.get("/", protectRoute, async (req, res) => {
   }
 });
 
-/* 🏢 COMPANY: list own foods */
+/* =========================================================================
+   🏢 COMPANY: List own foods
+   ========================================================================= */
 router.get("/company", protectRoute, async (req, res) => {
   try {
-    if (req.user.role !== "company")
+    if (req.user.role !== "company") {
       return res.status(403).json({ message: "Only companies can access this route" });
+    }
 
     const foods = await Food.find({ company: req.user._id }).sort({ createdAt: -1 });
     res.json(foods);
@@ -58,54 +63,29 @@ router.get("/company", protectRoute, async (req, res) => {
   }
 });
 
-/* ➕ CREATE FOOD (ONLY COMPANY) */
-router.post("/", protectRoute, async (req, res) => {
-  try {
-    if (req.user.role !== "company")
-      return res.status(403).json({ message: "Only companies can create foods" });
-
-    const { name, description, price, image, allergens = [], dietaryTypes = [] } = req.body;
-    if (!name || !description || !price)
-      return res.status(400).json({ message: "Missing required fields" });
-
-    let imageUrl = "";
-    if (image) {
-      const upload = await cloudinary.uploader.upload(image);
-      imageUrl = upload.secure_url;
-    }
-
-    const food = await Food.create({
-      name,
-      description,
-      price,
-      allergens,
-      dietaryTypes,
-      image: imageUrl || undefined,
-      company: req.user._id,
-      isAvailable: true,
-    });
-
-    await food.populate("company", "username companyName companyAddress");
-    res.status(201).json(food);
-  } catch (error) {
-    console.error("Error creating food:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-});
-
 /* =========================================================================
-   ➕ COMPANY: CREATE FOOD
-   body: { name, description, price, image?, allergens?, dietaryTypes?, estimatedCalories? }
+   ➕ CREATE FOOD (ONLY COMPANY)
    ========================================================================= */
 router.post("/", protectRoute, async (req, res) => {
   try {
-    if (req.user.role !== "company")
+    if (req.user.role !== "company") {
       return res.status(403).json({ message: "Only companies can create foods" });
+    }
 
-    const { name, description, price, image, allergens = [], dietaryTypes = [], estimatedCalories } = req.body;
+    const {
+      name,
+      description,
+      originalPrice,
+      discountedPrice,
+      stock,
+      allergens = [],
+      dietaryTypes = [],
+      image,
+    } = req.body;
 
-    if (!name || !description || !price)
+    if (!name || !originalPrice || !discountedPrice) {
       return res.status(400).json({ message: "Missing required fields" });
+    }
 
     let imageUrl = "";
     if (image) {
@@ -116,17 +96,17 @@ router.post("/", protectRoute, async (req, res) => {
     const food = await Food.create({
       name,
       description,
-      price,
+      originalPrice,
+      discountedPrice,
+      stock: typeof stock === "number" ? stock : 0,
       allergens,
       dietaryTypes,
-      estimatedCalories,
       image: imageUrl || undefined,
       company: req.user._id,
       isAvailable: true,
     });
 
     await food.populate("company", "username companyName companyAddress");
-
     res.status(201).json(food);
   } catch (error) {
     console.error("Error creating food:", error);
@@ -135,17 +115,19 @@ router.post("/", protectRoute, async (req, res) => {
 });
 
 /* =========================================================================
-   ✏️ COMPANY: UPDATE FOOD
+   ✏️ UPDATE FOOD (ONLY OWNER COMPANY)
    ========================================================================= */
 router.put("/:id", protectRoute, async (req, res) => {
   try {
-    if (req.user.role !== "company")
+    if (req.user.role !== "company") {
       return res.status(403).json({ message: "Only companies can update foods" });
+    }
 
     const existing = await Food.findById(req.params.id);
     if (!existing) return res.status(404).json({ message: "Food not found" });
-    if (existing.company.toString() !== req.user._id.toString())
+    if (existing.company.toString() !== req.user._id.toString()) {
       return res.status(401).json({ message: "Unauthorized" });
+    }
 
     const update = { ...req.body };
     if (update.image && update.image !== existing.image) {
@@ -164,20 +146,22 @@ router.put("/:id", protectRoute, async (req, res) => {
 });
 
 /* =========================================================================
-   ❌ COMPANY: DELETE FOOD
+   ❌ DELETE FOOD (ONLY OWNER COMPANY)
    ========================================================================= */
 router.delete("/:id", protectRoute, async (req, res) => {
   try {
-    if (req.user.role !== "company")
+    if (req.user.role !== "company") {
       return res.status(403).json({ message: "Only companies can delete foods" });
+    }
 
     const existing = await Food.findById(req.params.id);
     if (!existing) return res.status(404).json({ message: "Food not found" });
-    if (existing.company.toString() !== req.user._id.toString())
+    if (existing.company.toString() !== req.user._id.toString()) {
       return res.status(401).json({ message: "Unauthorized" });
+    }
 
     await existing.deleteOne();
-    res.json({ message: "Food deleted" });
+    res.json({ message: "Food deleted successfully" });
   } catch (error) {
     console.error("Error deleting food:", error);
     res.status(500).json({ message: "Internal server error" });
