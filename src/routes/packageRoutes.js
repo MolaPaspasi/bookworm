@@ -4,7 +4,7 @@ import Package from "../models/Package.js";
 import protectRoute from "../middleware/auth.middleware.js";
 import Rating from "../models/Rating.js";
 import User from "../models/User.js";
-
+import Food from "../models/Food.js";
 const router = express.Router();
 
 /* =========================================================================
@@ -48,6 +48,39 @@ router.get("/", protectRoute, async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
+/* =========================================================================
+   🏢 COMPANY: All products (both Food + Mystery Packages)
+   ========================================================================= */
+router.get("/all", protectRoute, async (req, res) => {
+  try {
+    // sadece şirket hesabı erişebilir
+    if (req.user.role !== "company") {
+      return res
+        .status(403)
+        .json({ message: "Only companies can access this route" });
+    }
+
+    // sadece kendi ürünleri
+    const companyId = req.user._id;
+
+    const [foods, packages] = await Promise.all([
+      Food.find({ company: companyId })
+        .sort({ createdAt: -1 })
+        .populate("company", "username companyName companyAddress"),
+      Package.find({ company: companyId })
+        .sort({ createdAt: -1 })
+        .populate("company", "username companyName companyAddress"),
+    ]);
+
+    // birleştirip dön
+    const allItems = [...foods, ...packages];
+    res.json(allItems);
+  } catch (error) {
+    console.error("Error fetching company all products:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
 
 /* =========================================================================
    🏢 COMPANY: List own packages
