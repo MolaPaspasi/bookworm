@@ -1,14 +1,15 @@
 import express from "express";
 import cloudinary from "../lib/cloudinary.js";
 import Package from "../models/Package.js";
-import protectRoute from "../middleware/auth.middleware.js";
+import Food from "../models/Food.js";
 import Rating from "../models/Rating.js";
 import User from "../models/User.js";
-import Food from "../models/Food.js";
+import protectRoute from "../middleware/auth.middleware.js";
+
 const router = express.Router();
 
 /* =========================================================================
-   📦 LIST PACKAGES (for customers / company profiles)
+   📦 LIST PACKAGES (for customers / search / filters)
    Supports: ?page, ?limit, ?company, ?search, ?itemType (food/mystery)
    ========================================================================= */
 router.get("/", protectRoute, async (req, res) => {
@@ -48,19 +49,16 @@ router.get("/", protectRoute, async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
+
 /* =========================================================================
-   🏢 COMPANY: All products (both Food + Mystery Packages)
+   🏢 COMPANY: All products (both Food + Packages)
    ========================================================================= */
 router.get("/all", protectRoute, async (req, res) => {
   try {
-    // sadece şirket hesabı erişebilir
     if (req.user.role !== "company") {
-      return res
-        .status(403)
-        .json({ message: "Only companies can access this route" });
+      return res.status(403).json({ message: "Only companies can access this route" });
     }
 
-    // sadece kendi ürünleri
     const companyId = req.user._id;
 
     const [foods, packages] = await Promise.all([
@@ -72,50 +70,27 @@ router.get("/all", protectRoute, async (req, res) => {
         .populate("company", "username companyName companyAddress"),
     ]);
 
-    // birleştirip dön
-    const allItems = [...foods, ...packages];
-    res.json(allItems);
+    res.json([...foods, ...packages]);
   } catch (error) {
     console.error("Error fetching company all products:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
 
-
 /* =========================================================================
-   🏢 COMPANY: List own packages
-   ========================================================================= */
-router.get("/company", protectRoute, async (req, res) => {
-  try {
-    if (req.user.role !== "company") {
-      return res.status(403).json({ message: "Only companies can access this route" });
-    }
-
-    const packages = await Package.find({ company: req.user._id })
-      .sort({ createdAt: -1 })
-      .populate("company", "username companyName companyAddress");
-
-    res.json(packages);
-  } catch (error) {
-    console.error("Error listing company packages:", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-});
-
-/* =========================================================================
-   ➕ CREATE PACKAGE (FOOD or MYSTERY)
+   ➕ CREATE (FOOD or MYSTERY)
    ========================================================================= */
 router.post("/", protectRoute, async (req, res) => {
   try {
     if (req.user.role !== "company") {
-      return res.status(403).json({ message: "Only companies can create packages" });
+      return res.status(403).json({ message: "Only companies can create items" });
     }
 
     const {
       name,
       description,
       itemType, // "food" or "mystery"
-      mealType, // "breakfast" | "lunch" | "dinner" | "dessert"
+      mealType, // "breakfast", "lunch", "dinner", "dessert"
       originalPrice,
       discountedPrice,
       stock,
@@ -134,7 +109,9 @@ router.post("/", protectRoute, async (req, res) => {
       imageUrl = upload.secure_url;
     }
 
-    const newPackage = await Package.create({
+    const Model = itemType === "food" ? Food : Package;
+
+    const newItem = await Model.create({
       name,
       description,
       itemType,
@@ -146,78 +123,89 @@ router.post("/", protectRoute, async (req, res) => {
       dietaryTypes,
       image: imageUrl || undefined,
       company: req.user._id,
+      isAvailable: true,
     });
 
-    await newPackage.populate("company", "username companyName companyAddress");
-    res.status(201).json(newPackage);
+    await newItem.populate("company", "username companyName companyAddress");
+    res.status(201).json(newItem);
   } catch (error) {
-    console.error("Error creating package:", error);
+    console.error("Error creating item:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
 
 /* =========================================================================
-   ✏️ UPDATE PACKAGE (ONLY OWNER COMPANY)
+   ✏️ UPDATE (for both models)
    ========================================================================= */
 router.put("/:id", protectRoute, async (req, res) => {
   try {
     if (req.user.role !== "company") {
-      return res.status(403).json({ message: "Only companies can update packages" });
+      return res.status(403).json({ message: "Only companies can update items" });
     }
 
-    const existing = await Package.findById(req.params.id);
-    if (!existing) return res.status(404).json({ message: "Package not found" });
-    if (existing.company.toString() !== req.user._id.toString()) {
+    const { id } = req.params;
+
+    let item = await Package.findById(id);
+    if (!item) item = await Food.findById(id);
+
+    if (!item) return res.status(404).json({ message: "Item not found" });
+    if (item.company.toString() !== req.user._id.toString()) {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
     const update = { ...req.body };
 
-    if (update.image && update.image !== existing.image) {
+    if (update.image && update.image !== item.image) {
       const upload = await cloudinary.uploader.upload(update.image);
       update.image = upload.secure_url;
     }
 
-    const updated = await Package.findByIdAndUpdate(req.params.id, update, { new: true })
+    const Model = item.itemType === "food" ? Food : Package;
+
+    const updated = await Model.findByIdAndUpdate(id, update, { new: true })
       .populate("company", "username companyName companyAddress");
 
     res.json(updated);
   } catch (error) {
-    console.error("Error updating package:", error);
+    console.error("Error updating item:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
 
 /* =========================================================================
-   ❌ DELETE PACKAGE (ONLY OWNER COMPANY)
+   ❌ DELETE (works for both Food + Package)
    ========================================================================= */
 router.delete("/:id", protectRoute, async (req, res) => {
   try {
     if (req.user.role !== "company") {
-      return res.status(403).json({ message: "Only companies can delete packages" });
+      return res.status(403).json({ message: "Only companies can delete items" });
     }
 
-    const existing = await Package.findById(req.params.id);
-    if (!existing) return res.status(404).json({ message: "Package not found" });
-    if (existing.company.toString() !== req.user._id.toString()) {
+    const { id } = req.params;
+
+    let item = await Package.findById(id);
+    if (!item) item = await Food.findById(id);
+
+    if (!item) return res.status(404).json({ message: "Item not found" });
+    if (item.company.toString() !== req.user._id.toString()) {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    await existing.deleteOne();
-    res.json({ message: "Package deleted successfully" });
+    await item.deleteOne();
+    res.json({ message: "Item deleted successfully" });
   } catch (error) {
-    console.error("Error deleting package:", error);
+    console.error("Error deleting item:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
 
 /* =========================================================================
-   ⭐ RATE PACKAGE (CUSTOMERS ONLY)
+   ⭐ RATE (CUSTOMERS ONLY)
    ========================================================================= */
 router.post("/:id/rate", protectRoute, async (req, res) => {
   try {
     if (req.user.role !== "customer") {
-      return res.status(403).json({ message: "Only customers can rate packages" });
+      return res.status(403).json({ message: "Only customers can rate items" });
     }
 
     const { rating, comment } = req.body;
@@ -225,15 +213,17 @@ router.post("/:id/rate", protectRoute, async (req, res) => {
       return res.status(400).json({ message: "Rating must be between 1 and 5" });
     }
 
-    const pack = await Package.findById(req.params.id);
-    if (!pack) return res.status(404).json({ message: "Package not found" });
+    // hem food hem package’ı ara
+    let item = await Package.findById(req.params.id);
+    if (!item) item = await Food.findById(req.params.id);
+    if (!item) return res.status(404).json({ message: "Item not found" });
 
     const existingRating = await Rating.findOne({
       package: req.params.id,
       customer: req.user._id,
     });
     if (existingRating) {
-      return res.status(400).json({ message: "You already rated this package" });
+      return res.status(400).json({ message: "You already rated this item" });
     }
 
     const newRating = await Rating.create({
@@ -246,37 +236,46 @@ router.post("/:id/rate", protectRoute, async (req, res) => {
     const allRatings = await Rating.find({ package: req.params.id });
     const avg = allRatings.reduce((sum, r) => sum + r.rating, 0) / allRatings.length;
 
-    await Package.findByIdAndUpdate(req.params.id, {
+    const Model = item.itemType === "food" ? Food : Package;
+    await Model.findByIdAndUpdate(req.params.id, {
       averageRating: Math.round(avg * 10) / 10,
       ratingCount: allRatings.length,
     });
 
     res.status(201).json(newRating);
   } catch (error) {
-    console.error("Error rating package:", error);
+    console.error("Error rating item:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
 
 /* =========================================================================
-   🧾 GET SINGLE PACKAGE DETAILS
+   🧾 GET SINGLE ITEM DETAILS (Food + Package unified)
    ========================================================================= */
 router.get("/:id", protectRoute, async (req, res) => {
   try {
-    const pack = await Package.findById(req.params.id).populate(
+    const { id } = req.params;
+
+    let item = await Package.findById(id).populate(
       "company",
       "username companyName companyAddress profileImage"
     );
+    if (!item) {
+      item = await Food.findById(id).populate(
+        "company",
+        "username companyName companyAddress profileImage"
+      );
+    }
 
-    if (!pack) return res.status(404).json({ message: "Package not found" });
+    if (!item) return res.status(404).json({ message: "Item not found" });
 
-    const ratings = await Rating.find({ package: req.params.id })
+    const ratings = await Rating.find({ package: id })
       .populate("customer", "username profileImage")
       .sort({ createdAt: -1 });
 
-    res.json({ package: pack, ratings });
+    res.json({ package: item, ratings });
   } catch (error) {
-    console.error("Error fetching package details:", error);
+    console.error("Error fetching item details:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
