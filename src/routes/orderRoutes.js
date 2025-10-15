@@ -1,52 +1,10 @@
 import express from "express";
 import protectRoute from "../middleware/auth.middleware.js";
 import Order from "../models/Order.js";
-import Package from "../models/Package.js";
-import Reservation from "../models/Reservation.js";
 import { generateHashedCode, isValidCode } from "../utils/rotatingCode.js";
+import Rating from "../models/Rating.js";
 
 const router = express.Router();
-const HISTORY_STATUSES = ["picked", "completed"];
-
-const buildReservationMaps = async (packageIds) => {
-  if (!Array.isArray(packageIds) || packageIds.length === 0) {
-    return { reservedTotals: new Map(), reservedByCustomer: new Map() };
-  }
-
-  const now = new Date();
-  const reservations = await Reservation.aggregate([
-    {
-      $match: {
-        package: { $in: packageIds },
-        expiresAt: { $gt: now },
-      },
-    },
-    {
-      $group: {
-        _id: { package: "$package", customer: "$customer" },
-        quantity: { $sum: "$quantity" },
-      },
-    },
-  ]);
-
-  const reservedTotals = new Map();
-  const reservedByCustomer = new Map();
-
-  reservations.forEach((entry) => {
-    const pkgId = entry._id.package.toString();
-    const customerId = entry._id.customer.toString();
-    const qty = entry.quantity || 0;
-
-    reservedTotals.set(pkgId, (reservedTotals.get(pkgId) || 0) + qty);
-
-    if (!reservedByCustomer.has(pkgId)) {
-      reservedByCustomer.set(pkgId, new Map());
-    }
-    reservedByCustomer.get(pkgId).set(customerId, qty);
-  });
-
-  return { reservedTotals, reservedByCustomer };
-};
 
 /* =========================================================================
    🧾 CREATE ORDER (CUSTOMER)
@@ -57,131 +15,35 @@ router.post("/", protectRoute, async (req, res) => {
       return res.status(403).json({ message: "Only customers can create orders" });
     }
 
-    const rawItems = Array.isArray(req.body.items) ? req.body.items : [];
-    if (!rawItems.length) {
-      return res.status(400).json({ message: "No items provided for the order" });
+    const { company, items, totalAmount } = req.body;
+    if (!company || !items || !totalAmount) {
+      return res.status(400).json({ message: "Missing required fields" });
     }
 
-    const items = rawItems.map((item) => ({
-      package: item.package || item.packageId || item._id,
-      quantity: Number(item.quantity ?? 1),
-    }));
-
-    if (items.some((item) => !item.package || !Number.isFinite(item.quantity) || item.quantity <= 0)) {
-      return res.status(400).json({ message: "Each item must include a valid package and quantity" });
-    }
-
-    const packageIds = items.map((item) => item.package);
-    const packages = await Package.find({ _id: { $in: packageIds } });
-
-    if (packages.length !== items.length) {
-      return res.status(400).json({ message: "One or more packages were not found" });
-    }
-
-    const packageMap = new Map(packages.map((pkg) => [pkg._id.toString(), pkg]));
-    const companyId = packages[0].company?.toString();
-
-    if (!companyId) {
-      return res.status(400).json({ message: "Unable to determine company for selected packages" });
-    }
-
-    const allFromSameCompany = packages.every(
-      (pkg) => pkg.company?.toString() === companyId
-    );
-    if (!allFromSameCompany) {
-      return res
-        .status(400)
-        .json({ message: "All items in the order must belong to the same company" });
-    }
-
-    const { reservedTotals, reservedByCustomer } = await buildReservationMaps(packageIds);
-    const userId = req.user._id.toString();
-
-    let computedTotalAmount = 0;
-
-    for (const item of items) {
-      const pkg = packageMap.get(item.package.toString());
-      if (!pkg) {
-        return res.status(400).json({ message: "Package data is no longer available" });
-      }
-
-      const baseStock = typeof pkg.stock === "number" ? pkg.stock : 0;
-      const reservedTotal = reservedTotals.get(pkg._id.toString()) || 0;
-      const reservedByUser =
-        reservedByCustomer.get(pkg._id.toString())?.get(userId) || 0;
-      const reservedByOthers = reservedTotal - reservedByUser;
-      const available = baseStock - reservedByOthers;
-
-      if (available < item.quantity) {
-        return res
-          .status(400)
-          .json({ message: `Insufficient stock available for ${pkg.name}` });
-      }
-
-      computedTotalAmount += (pkg.price || 0) * item.quantity;
-    }
-
-    const stockAdjustments = [];
-    for (const item of items) {
-      const updatedPackage = await Package.findOneAndUpdate(
-        { _id: item.package, stock: { $gte: item.quantity } },
-        { $inc: { stock: -item.quantity } },
-        { new: true }
-      );
-
-      if (!updatedPackage) {
-        await Promise.all(
-          stockAdjustments.map(({ packageId, quantity }) =>
-            Package.updateOne({ _id: packageId }, { $inc: { stock: quantity } })
-          )
-        );
-        return res
-          .status(409)
-          .json({ message: "Stock changed while processing the order. Please try again." });
-      }
-
-      stockAdjustments.push({ packageId: item.package, quantity: item.quantity });
-    }
-
+    // 10 saniyelik ilk kodu oluştur
     const { plain, hash } = await generateHashedCode();
 
     const order = await Order.create({
       customer: req.user._id,
-      company: companyId,
-      items: items.map((item) => ({
-        package: item.package,
-        quantity: item.quantity,
-      })),
-      totalAmount: Number.isFinite(computedTotalAmount)
-        ? Number(computedTotalAmount.toFixed(2))
-        : 0,
+      company,
+      items,
+      totalAmount,
       pickupCodeHash: hash,
       codeGeneratedAt: new Date(),
       status: "confirmed",
     });
 
-    await Promise.all(
-      items.map((item) =>
-        Reservation.findOneAndDelete({
-          package: item.package,
-          customer: req.user._id,
-        })
-      )
-    );
-
     res.status(201).json({
       message: "Order created successfully",
       orderId: order._id,
-      pickupCode: plain,
+      pickupCode: plain, // sadece backend tarafında görülebilir
       createdAt: order.createdAt,
-      totalAmount: order.totalAmount,
     });
   } catch (err) {
     console.error("Order creation error:", err);
     res.status(500).json({ message: "Internal server error" });
   }
 });
-
 
 /* =========================================================================
    👤 GET MY ORDERS (CUSTOMER)
@@ -192,9 +54,13 @@ router.get("/my", protectRoute, async (req, res) => {
       return res.status(403).json({ message: "Only customers can view their orders" });
     }
 
-    const orders = await Order.find({ customer: req.user._id })
+   const orders = await Order.find({
+      customer: req.user._id,
+      status: "confirmed", // ✅ sadece tamamlanmış siparişleri getir
+    })
       .populate("company", "companyName username")
-      .populate("items.package", "name price");
+      .populate("items.package", "name price")
+      .sort({ createdAt: -1 });
 
     res.json(orders);
   } catch (err) {
@@ -202,24 +68,26 @@ router.get("/my", protectRoute, async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
-
+/* =========================================================================
+   📜 GET CUSTOMER COMPLETED ORDERS (HISTORY)
+   ========================================================================= */
 router.get("/my/history", protectRoute, async (req, res) => {
   try {
     if (req.user.role !== "customer") {
-      return res.status(403).json({ message: "Only customers can view their history" });
+      return res.status(403).json({ message: "Only customers can view history" });
     }
 
     const orders = await Order.find({
       customer: req.user._id,
-      status: { $in: HISTORY_STATUSES },
+      status: "completed", // ✅ sadece tamamlanmış siparişleri getir
     })
-      .sort({ createdAt: -1 })
-      .populate("company", "companyName username email")
-      .populate("items.package", "name price");
+      .populate("company", "companyName username")
+      .populate("items.package", "name price")
+      .sort({ createdAt: -1 });
 
     res.json(orders);
   } catch (err) {
-    console.error("Fetch customer history error:", err);
+    console.error("Fetch customer completed orders error:", err);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -244,26 +112,7 @@ router.get("/company", protectRoute, async (req, res) => {
   }
 });
 
-router.get("/company/history", protectRoute, async (req, res) => {
-  try {
-    if (req.user.role !== "company") {
-      return res.status(403).json({ message: "Only companies can view their history" });
-    }
 
-    const orders = await Order.find({
-      company: req.user._id,
-      status: { $in: HISTORY_STATUSES },
-    })
-      .sort({ createdAt: -1 })
-      .populate("customer", "username email")
-      .populate("items.package", "name price");
-
-    res.json(orders);
-  } catch (err) {
-    console.error("Fetch company history error:", err);
-    res.status(500).json({ message: "Internal server error" });
-  }
-});
 
 /* =========================================================================
    🔄 REFRESH CODE (OPTIONAL)
@@ -292,8 +141,108 @@ router.post("/:id/refresh-code", protectRoute, async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
+/* =========================================================================
+   🕓 GET COMPANY PICKED ORDERS (HISTORY)
+   ========================================================================= */
+router.get("/company/history", protectRoute, async (req, res) => {
+  try {
+    if (req.user.role !== "company") {
+      return res.status(403).json({ message: "Only companies can view history" });
+    }
 
+    const orders = await Order.find({
+      company: req.user._id,
+      status: "picked", // ✅ sadece teslim edilmiş (picked) siparişleri getir
+    })
+      .populate("customer", "username email")
+      .populate("items.package", "name price")
+      .sort({ createdAt: -1 }); // son sipariş en üstte
 
+    res.json(orders);
+  } catch (err) {
+    console.error("Fetch company picked orders error:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+/* =========================================================================
+   💬 LEAVE FEEDBACK (CUSTOMER ONLY)
+   ========================================================================= */
+router.post("/:id/feedback", protectRoute, async (req, res) => {
+  try {
+    if (req.user.role !== "customer")
+      return res.status(403).json({ message: "Only customers can leave feedback" });
+
+    const { rating, comment } = req.body;
+    if (!rating || rating < 1 || rating > 5)
+      return res.status(400).json({ message: "Rating must be between 1 and 5" });
+
+    const order = await Order.findById(req.params.id)
+      .populate("company")
+      .populate("items.package");
+
+    if (!order) return res.status(404).json({ message: "Order not found" });
+    if (order.customer.toString() !== req.user._id.toString())
+      return res.status(403).json({ message: "Not your order" });
+    if (order.status !== "picked")
+      return res.status(400).json({ message: "You can only rate picked orders" });
+
+    // zaten feedback bırakmış mı?
+    const existing = await Rating.findOne({ order: order._id, customer: req.user._id });
+    if (existing)
+      return res.status(400).json({ message: "Feedback already submitted" });
+
+    // her package için rating oluştur
+    for (const item of order.items) {
+      await Rating.create({
+        order: order._id,
+        customer: req.user._id,
+        company: order.company._id,
+        package: item.package._id,
+        rating,
+        comment,
+      });
+    }
+
+    order.status = "completed";
+    await order.save();
+
+    res.status(201).json({ message: "Feedback submitted successfully" });
+  } catch (err) {
+    console.error("Feedback error:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+/* =========================================================================
+   💬 COMPANY REPLY TO FEEDBACK
+   ========================================================================= */
+router.post("/:id/reply", protectRoute, async (req, res) => {
+  try {
+    if (req.user.role !== "company")
+      return res.status(403).json({ message: "Only companies can reply" });
+
+    const { reply } = req.body;
+    if (!reply?.trim())
+      return res.status(400).json({ message: "Reply cannot be empty" });
+
+    const rating = await Rating.findOne({ order: req.params.id });
+    if (!rating)
+      return res.status(404).json({ message: "Rating not found" });
+
+    if (rating.company.toString() !== req.user._id.toString())
+      return res.status(403).json({ message: "Not authorized" });
+
+    if (rating.companyReply)
+      return res.status(400).json({ message: "Reply already submitted" });
+
+    rating.companyReply = reply.trim();
+    await rating.save();
+
+    res.json({ message: "Reply added successfully" });
+  } catch (err) {
+    console.error("Reply error:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 /* =========================================================================
    ✅ VERIFY CODE (COMPANY ONLY)
    ========================================================================= */
