@@ -29,6 +29,7 @@ const packageSchema = new mongoose.Schema(
       ingredients: [String],
       allergens: [String],
     }],
+    stock: { type: Number, required: true, default: 0 },
     // Package type (mystery, themed, etc.)
     packageType: {
       type: String,

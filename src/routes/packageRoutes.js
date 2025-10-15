@@ -8,27 +8,31 @@ import protectRoute from "../middleware/auth.middleware.js";
 
 const router = express.Router();
 
-const escapeRegex = (value = "") =>
-  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escapeRegex = (value = "") => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /* =========================================================================
-   📦 GET ALL PACKAGES (CUSTOMERS CAN SEE ALL)
+   📦 LIST PACKAGES (PUBLIC FOR LOGGED USERS)
+   Supports: ?page, ?limit, ?packageType, ?company, ?search
    ========================================================================= */
 router.get("/", protectRoute, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
+
     const packageType = req.query.packageType;
+    const companyId = req.query.company;
     const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
 
-    // Build query
     const query = { isAvailable: true };
     if (packageType && packageType !== "all") query.packageType = packageType;
+    if (companyId) query.company = companyId;
 
     if (search) {
       const safeSearch = escapeRegex(search);
       const searchRegex = new RegExp(safeSearch, "i");
+
+      // find matching companies by name/username/address
       const matchingCompanyIds = await User.distinct("_id", {
         role: "company",
         $or: [
@@ -38,11 +42,7 @@ router.get("/", protectRoute, async (req, res) => {
         ],
       });
 
-      query.$or = [
-        { name: searchRegex },
-        { description: searchRegex },
-      ];
-
+      query.$or = [{ name: searchRegex }, { description: searchRegex }];
       if (matchingCompanyIds.length > 0) {
         query.$or.push({ company: { $in: matchingCompanyIds } });
       }
@@ -69,16 +69,15 @@ router.get("/", protectRoute, async (req, res) => {
 });
 
 /* =========================================================================
-   🏢 GET COMPANY PACKAGES (FOR COMPANY DASHBOARD)
+   🏢 COMPANY: LIST OWN PACKAGES
    ========================================================================= */
 router.get("/company", protectRoute, async (req, res) => {
   try {
-    if (req.user.role !== "company")
+    if (req.user.role !== "company") {
       return res.status(403).json({ message: "Only companies can access this route" });
+    }
 
-    const packages = await Package.find({ company: req.user._id })
-      .sort({ createdAt: -1 });
-
+    const packages = await Package.find({ company: req.user._id }).sort({ createdAt: -1 });
     res.json(packages);
   } catch (error) {
     console.error("Error fetching company packages:", error);
@@ -87,24 +86,84 @@ router.get("/company", protectRoute, async (req, res) => {
 });
 
 /* =========================================================================
+   🧾 GET PACKAGE RATINGS
+   ========================================================================= */
+router.get("/:id/ratings", protectRoute, async (req, res) => {
+  try {
+    const ratings = await Rating.find({ package: req.params.id })
+      .populate("customer", "username profileImage")
+      .sort({ createdAt: -1 });
+
+    res.json(ratings);
+  } catch (error) {
+    console.error("Error getting ratings", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+/* =========================================================================
+   ⚠️ GET ALLERGEN INFO (from Food collection)
+   ========================================================================= */
+router.get("/allergens", protectRoute, async (_req, res) => {
+  try {
+    const foods = await Food.find({ isAvailable: true }).populate(
+      "company",
+      "username companyName"
+    );
+
+    const result = foods.map((food) => ({
+      name: food.name,
+      description: food.description,
+      allergens: food.allergens,
+      company: food.company,
+    }));
+
+    res.json(result);
+  } catch (error) {
+    console.error("Error fetching food items", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+/* =========================================================================
    ➕ CREATE PACKAGE (ONLY COMPANY)
+   Note: Only 1 "mystery" bag per company (business rule)
    ========================================================================= */
 router.post("/", protectRoute, async (req, res) => {
   try {
-    if (req.user.role !== "company")
+    if (req.user.role !== "company") {
       return res.status(403).json({ message: "Only companies can add packages" });
+    }
 
-    const { name, description, price, packageType, foodItems = [], dietaryTypes = [], estimatedCalories, image } = req.body;
+    const {
+      name,
+      description,
+      price,
+      packageType, // e.g. "mystery"
+      foodItems = [],
+      dietaryTypes = [],
+      estimatedCalories,
+      image,
+    } = req.body;
 
-    if (!name || !description || !price || !packageType)
+    if (!name || !description || !price || !packageType) {
       return res.status(400).json({ message: "Missing required fields" });
+    }
 
-    // Limit one package per company (if needed)
-    const hasPackage = await Package.exists({ company: req.user._id });
-    if (hasPackage)
-      return res.status(400).json({ message: "Each company can only create one package" });
+    // Only restrict uniqueness for "mystery" bags
+    if (packageType === "mystery") {
+      const hasMystery = await Package.exists({
+        company: req.user._id,
+        packageType: "mystery",
+      });
+      if (hasMystery) {
+        return res
+          .status(400)
+          .json({ message: "Each company can only create one mystery bag" });
+      }
+    }
 
-    // Upload image if provided
+    // Upload image (optional)
     let imageUrl = "";
     if (image) {
       const uploadResponse = await cloudinary.uploader.upload(image);
@@ -138,25 +197,32 @@ router.post("/", protectRoute, async (req, res) => {
    ========================================================================= */
 router.put("/:id", protectRoute, async (req, res) => {
   try {
-    if (req.user.role !== "company")
+    if (req.user.role !== "company") {
       return res.status(403).json({ message: "Only companies can update packages" });
+    }
 
     const existingPackage = await Package.findById(req.params.id);
-    if (!existingPackage)
+    if (!existingPackage) {
       return res.status(404).json({ message: "Package not found" });
+    }
 
-    if (existingPackage.company.toString() !== req.user._id.toString())
+    if (existingPackage.company.toString() !== req.user._id.toString()) {
       return res.status(401).json({ message: "Unauthorized" });
+    }
 
     const updateData = { ...req.body };
 
+    // If image changed, upload new one
     if (updateData.image && updateData.image !== existingPackage.image) {
       const uploadResponse = await cloudinary.uploader.upload(updateData.image);
       updateData.image = uploadResponse.secure_url;
     }
 
-    const updatedPackage = await Package.findByIdAndUpdate(req.params.id, updateData, { new: true })
-      .populate("company", "username companyName companyAddress");
+    const updatedPackage = await Package.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true }
+    ).populate("company", "username companyName companyAddress");
 
     res.json(updatedPackage);
   } catch (error) {
@@ -166,21 +232,24 @@ router.put("/:id", protectRoute, async (req, res) => {
 });
 
 /* =========================================================================
-   ❌ DELETE PACKAGE
+   ❌ DELETE PACKAGE (ONLY OWNER COMPANY)
    ========================================================================= */
 router.delete("/:id", protectRoute, async (req, res) => {
   try {
-    if (req.user.role !== "company")
+    if (req.user.role !== "company") {
       return res.status(403).json({ message: "Only companies can delete packages" });
+    }
 
     const existingPackage = await Package.findById(req.params.id);
-    if (!existingPackage)
+    if (!existingPackage) {
       return res.status(404).json({ message: "Package not found" });
+    }
 
-    if (existingPackage.company.toString() !== req.user._id.toString())
+    if (existingPackage.company.toString() !== req.user._id.toString()) {
       return res.status(401).json({ message: "Unauthorized" });
+    }
 
-    // Optional: delete Cloudinary image
+    // Optional: delete Cloudinary asset (best if you stored public_id)
     if (existingPackage.image?.includes("cloudinary")) {
       try {
         const parts = existingPackage.image.split("/");
@@ -204,19 +273,25 @@ router.delete("/:id", protectRoute, async (req, res) => {
    ========================================================================= */
 router.post("/:id/rate", protectRoute, async (req, res) => {
   try {
-    if (req.user.role !== "customer")
+    if (req.user.role !== "customer") {
       return res.status(403).json({ message: "Only customers can rate packages" });
+    }
 
     const { rating, comment } = req.body;
-    if (!rating || rating < 1 || rating > 5)
+    if (!rating || rating < 1 || rating > 5) {
       return res.status(400).json({ message: "Rating must be between 1 and 5" });
+    }
 
     const pack = await Package.findById(req.params.id);
     if (!pack) return res.status(404).json({ message: "Package not found" });
 
-    const existingRating = await Rating.findOne({ package: req.params.id, customer: req.user._id });
-    if (existingRating)
+    const existingRating = await Rating.findOne({
+      package: req.params.id,
+      customer: req.user._id,
+    });
+    if (existingRating) {
       return res.status(400).json({ message: "You already rated this package" });
+    }
 
     const newRating = await Rating.create({
       package: req.params.id,
@@ -241,57 +316,30 @@ router.post("/:id/rate", protectRoute, async (req, res) => {
 });
 
 /* =========================================================================
-   🧾 GET PACKAGE RATINGS
+   🧾 GET SINGLE PACKAGE DETAILS (+ related foods & ratings)
    ========================================================================= */
-router.get("/:id/ratings", protectRoute, async (req, res) => {
-  try {
-    const ratings = await Rating.find({ package: req.params.id })
-      .populate("customer", "username profileImage")
-      .sort({ createdAt: -1 });
-
-    res.json(ratings);
-  } catch (error) {
-    console.error("Error getting ratings", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-});
-
-/* =========================================================================
-   ⚠️ GET ALLERGEN INFO
-   ========================================================================= */
-router.get("/allergens", protectRoute, async (req, res) => {
-  try {
-    const foods = await Food.find({ isAvailable: true })
-      .populate("company", "username companyName");
-
-    const result = foods.map(food => ({
-      name: food.name,
-      description: food.description,
-      allergens: food.allergens,
-      company: food.company,
-    }));
-
-    res.json(result);
-  } catch (error) {
-    console.error("Error fetching food items", error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-});
-// 🧾 GET SINGLE PACKAGE DETAILS
 router.get("/:id", protectRoute, async (req, res) => {
   try {
-    const pack = await Package.findById(req.params.id)
-      .populate("company", "username companyName companyAddress profileImage");
+    const pack = await Package.findById(req.params.id).populate(
+      "company",
+      "username companyName companyAddress profileImage"
+    );
 
-    if (!pack)
-      return res.status(404).json({ message: "Package not found" });
+    if (!pack) return res.status(404).json({ message: "Package not found" });
 
-    // Yorumları (ratings) getir
     const ratings = await Rating.find({ package: req.params.id })
       .populate("customer", "username profileImage")
       .sort({ createdAt: -1 });
 
-    res.json({ package: pack, ratings });
+    // Other foods from the same company (to show under the mystery bag)
+    const relatedFoods = await Food.find({
+      company: pack.company?._id,
+      isAvailable: true,
+    })
+      .sort({ createdAt: -1 })
+      .limit(20);
+
+    res.json({ package: pack, ratings, relatedFoods });
   } catch (error) {
     console.error("Error fetching package details:", error);
     res.status(500).json({ message: "Internal server error" });

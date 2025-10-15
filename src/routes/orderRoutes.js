@@ -5,7 +5,9 @@ import { generateHashedCode, isValidCode } from "../utils/rotatingCode.js";
 
 const router = express.Router();
 
-/* 🧾 CREATE ORDER (customer) */
+/* =========================================================================
+   🧾 CREATE ORDER (CUSTOMER)
+   ========================================================================= */
 router.post("/", protectRoute, async (req, res) => {
   try {
     if (req.user.role !== "customer") {
@@ -17,6 +19,7 @@ router.post("/", protectRoute, async (req, res) => {
       return res.status(400).json({ message: "Missing required fields" });
     }
 
+    // 10 saniyelik ilk kodu oluştur
     const { plain, hash } = await generateHashedCode();
 
     const order = await Order.create({
@@ -32,7 +35,7 @@ router.post("/", protectRoute, async (req, res) => {
     res.status(201).json({
       message: "Order created successfully",
       orderId: order._id,
-      pickupCode: plain, // ilk 10 sn'lik kod
+      pickupCode: plain, // sadece backend tarafında görülebilir
       createdAt: order.createdAt,
     });
   } catch (err) {
@@ -41,7 +44,9 @@ router.post("/", protectRoute, async (req, res) => {
   }
 });
 
-/* 👤 GET MY ORDERS (customer) */
+/* =========================================================================
+   👤 GET MY ORDERS (CUSTOMER)
+   ========================================================================= */
 router.get("/my", protectRoute, async (req, res) => {
   try {
     if (req.user.role !== "customer") {
@@ -59,7 +64,9 @@ router.get("/my", protectRoute, async (req, res) => {
   }
 });
 
-/* 🏢 GET COMPANY ORDERS */
+/* =========================================================================
+   🏢 GET COMPANY ORDERS
+   ========================================================================= */
 router.get("/company", protectRoute, async (req, res) => {
   try {
     if (req.user.role !== "company") {
@@ -77,7 +84,37 @@ router.get("/company", protectRoute, async (req, res) => {
   }
 });
 
-/* ✅ VERIFY CODE (company only) */
+/* =========================================================================
+   🔄 REFRESH CODE (OPTIONAL)
+   Şirket tarafı dilerse manuel olarak yeni kod oluşturabilir.
+   ========================================================================= */
+router.post("/:id/refresh-code", protectRoute, async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ message: "Order not found" });
+
+    if (req.user.role !== "company" || String(req.user._id) !== String(order.company)) {
+      return res.status(403).json({ message: "Not authorized to refresh this code" });
+    }
+
+    const { plain, hash } = await generateHashedCode();
+    order.pickupCodeHash = hash;
+    order.codeGeneratedAt = new Date();
+    await order.save();
+
+    res.json({
+      message: "Code refreshed successfully",
+      newCode: plain,
+    });
+  } catch (err) {
+    console.error("Code refresh error:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+/* =========================================================================
+   ✅ VERIFY CODE (COMPANY ONLY)
+   ========================================================================= */
 router.post("/:id/verify-code", protectRoute, async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
@@ -90,7 +127,6 @@ router.post("/:id/verify-code", protectRoute, async (req, res) => {
     const { code } = req.body;
     if (!code) return res.status(400).json({ message: "Code required" });
 
-    // kodun süresi geçti mi?
     const expired = Date.now() - new Date(order.codeGeneratedAt).getTime() > 10000;
     if (expired) return res.status(400).json({ message: "Code expired. Wait for next rotation." });
 
@@ -100,7 +136,7 @@ router.post("/:id/verify-code", protectRoute, async (req, res) => {
     order.status = "picked";
     await order.save();
 
-    res.json({ message: "✅ Code verified, order marked as picked" });
+    res.json({ message: "✅ Code verified successfully, order marked as picked" });
   } catch (err) {
     console.error("Verify code error:", err);
     res.status(500).json({ message: "Internal server error" });
