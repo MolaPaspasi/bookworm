@@ -4,11 +4,66 @@ import Package from "../models/Package.js";
 import Rating from "../models/Rating.js";
 import Food from "../models/Food.js";
 import User from "../models/User.js";
+import Reservation from "../models/Reservation.js";
 import protectRoute from "../middleware/auth.middleware.js";
 
 const router = express.Router();
 
 const escapeRegex = (value = "") => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const RESERVATION_WINDOW_MINUTES = 10;
+
+const buildReservationMaps = async (packageIds) => {
+  if (!Array.isArray(packageIds) || packageIds.length === 0) {
+    return { reservedTotals: new Map(), reservedByCustomer: new Map() };
+  }
+
+  const now = new Date();
+  const reservations = await Reservation.aggregate([
+    {
+      $match: {
+        package: { $in: packageIds },
+        expiresAt: { $gt: now },
+      },
+    },
+    {
+      $group: {
+        _id: { package: "$package", customer: "$customer" },
+        quantity: { $sum: "$quantity" },
+      },
+    },
+  ]);
+
+  const reservedTotals = new Map();
+  const reservedByCustomer = new Map();
+
+  reservations.forEach((entry) => {
+    const pkgId = entry._id.package.toString();
+    const customerId = entry._id.customer.toString();
+    const qty = entry.quantity || 0;
+
+    reservedTotals.set(pkgId, (reservedTotals.get(pkgId) || 0) + qty);
+
+    if (!reservedByCustomer.has(pkgId)) {
+      reservedByCustomer.set(pkgId, new Map());
+    }
+    reservedByCustomer.get(pkgId).set(customerId, qty);
+  });
+
+  return { reservedTotals, reservedByCustomer };
+};
+
+const withAvailability = (doc, reservedTotalsMap) => {
+  if (!doc) return null;
+  const json = doc.toObject ? doc.toObject() : doc;
+  const reserved = reservedTotalsMap.get(doc._id.toString()) || 0;
+  const stock = typeof json.stock === "number" ? json.stock : 0;
+
+  return {
+    ...json,
+    availableStock: Math.max(0, stock - reserved),
+    reservedStock: reserved,
+  };
+};
 
 /* =========================================================================
    📦 LIST PACKAGES (PUBLIC FOR LOGGED USERS)
@@ -54,16 +109,94 @@ router.get("/", protectRoute, async (req, res) => {
       .limit(limit)
       .populate("company", "username companyName companyAddress");
 
+    const packageIds = packages.map((pkg) => pkg._id);
+    const { reservedTotals } = await buildReservationMaps(packageIds);
+    const packagesWithAvailability = packages.map((pkg) => withAvailability(pkg, reservedTotals));
+
     const totalPackages = await Package.countDocuments(query);
 
     res.json({
-      packages,
+      packages: packagesWithAvailability,
       currentPage: page,
       totalPackages,
       totalPages: Math.ceil(totalPackages / limit),
     });
   } catch (error) {
     console.error("Error in get all packages route", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+/* =========================================================================
+   Reserve stock for a package (customers)
+   ========================================================================= */
+router.put("/:id/reserve", protectRoute, async (req, res) => {
+  try {
+    if (req.user.role !== "customer") {
+      return res.status(403).json({ message: "Only customers can reserve stock" });
+    }
+
+    const quantity = Number(req.body?.quantity ?? 0);
+    if (!Number.isFinite(quantity) || quantity < 0) {
+      return res.status(400).json({ message: "Quantity must be a non-negative number" });
+    }
+
+    const pack = await Package.findById(req.params.id);
+    if (!pack) {
+      return res.status(404).json({ message: "Package not found" });
+    }
+
+    if (!pack.isAvailable) {
+      return res.status(400).json({ message: "This package is not available for reservation" });
+    }
+
+    const packageId = pack._id;
+    const customerId = req.user._id;
+    const { reservedTotals, reservedByCustomer } = await buildReservationMaps([packageId]);
+
+    const reservedByUser =
+      reservedByCustomer
+        .get(packageId.toString())
+        ?.get(customerId.toString()) || 0;
+    const reservedByOthers =
+      (reservedTotals.get(packageId.toString()) || 0) - reservedByUser;
+
+    const baseStock = typeof pack.stock === "number" ? pack.stock : 0;
+
+    if (quantity > 0) {
+      const available = baseStock - reservedByOthers;
+      if (available < quantity) {
+        return res.status(400).json({
+          message: "Insufficient stock available for reservation",
+          available,
+        });
+      }
+
+      const expiresAt = new Date(Date.now() + RESERVATION_WINDOW_MINUTES * 60 * 1000);
+      await Reservation.findOneAndUpdate(
+        { package: packageId, customer: customerId },
+        {
+          package: packageId,
+          customer: customerId,
+          quantity,
+          expiresAt,
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+    } else {
+      await Reservation.findOneAndDelete({ package: packageId, customer: customerId });
+    }
+
+    const { reservedTotals: updatedTotals } = await buildReservationMaps([packageId]);
+    const reservedTotal = updatedTotals.get(packageId.toString()) || 0;
+
+    return res.json({
+      packageId: packageId.toString(),
+      quantity,
+      availableStock: Math.max(0, baseStock - reservedTotal),
+    });
+  } catch (error) {
+    console.error("Error reserving package stock:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -78,7 +211,11 @@ router.get("/company", protectRoute, async (req, res) => {
     }
 
     const packages = await Package.find({ company: req.user._id }).sort({ createdAt: -1 });
-    res.json(packages);
+    const packageIds = packages.map((pkg) => pkg._id);
+    const { reservedTotals } = await buildReservationMaps(packageIds);
+    const packagesWithAvailability = packages.map((pkg) => withAvailability(pkg, reservedTotals));
+
+    res.json(packagesWithAvailability);
   } catch (error) {
     console.error("Error fetching company packages:", error);
     res.status(500).json({ message: "Internal server error" });
@@ -339,7 +476,22 @@ router.get("/:id", protectRoute, async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(20);
 
-    res.json({ package: pack, ratings, relatedFoods });
+    const packageIds = [pack._id];
+    const { reservedTotals, reservedByCustomer } = await buildReservationMaps(packageIds);
+    const packageWithAvailability = withAvailability(pack, reservedTotals);
+    const currentUserReservations =
+      reservedByCustomer
+        .get(pack._id.toString())
+        ?.get(req.user._id.toString()) || 0;
+
+    res.json({
+      package: {
+        ...packageWithAvailability,
+        reservedByCurrentUser: currentUserReservations,
+      },
+      ratings,
+      relatedFoods,
+    });
   } catch (error) {
     console.error("Error fetching package details:", error);
     res.status(500).json({ message: "Internal server error" });
