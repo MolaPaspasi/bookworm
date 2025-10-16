@@ -168,4 +168,35 @@ router.delete("/:id", protectRoute, async (req, res) => {
   }
 });
 
+/* =========================================================================
+   🍽️ RESERVE FOOD STOCK (CUSTOMERS ONLY)
+   ========================================================================= */
+router.put("/:id/reserve", protectRoute, async (req, res) => {
+  try {
+    const { quantity } = req.body;
+    const food = await Food.findById(req.params.id);
+    if (!food) return res.status(404).json({ message: "Food not found" });
+
+    if (quantity > food.stock)
+      return res.status(400).json({ message: "Not enough stock available." });
+
+    food.stock = food.stock - 1;
+    await food.save();
+
+    // 5 dakika sonra rezervasyonu iade et
+    setTimeout(async () => {
+      const item = await Food.findById(req.params.id);
+      if (item) {
+        item.stock = item.stock + 1;
+        await item.save();
+      }
+    }, 10 * 30 * 1000);
+
+    res.json({ message: "Stock reserved successfully", food });
+  } catch (err) {
+    console.error("Reserve error:", err);
+    res.status(500).json({ message: "Unable to reserve stock for this food." });
+  }
+});
+
 export default router;

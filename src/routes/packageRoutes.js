@@ -274,14 +274,14 @@ router.put("/:id/reserve", protectRoute, async (req, res) => {
     pack.stock = pack.stock - 1;
     await pack.save();
 
-    // 10 dakika sonra iade et (rezervasyon süresi)
+    // 5 dakika sonra iade et (rezervasyon süresi)
     setTimeout(async () => {
       const item = await Package.findById(req.params.id);
       if (item) {
         item.stock = item.stock + 1;
         await item.save();
       }
-    }, 10 * 60 * 1000);
+    }, 10 * 30 * 1000);
 
     res.json({ message: "Stock reserved successfully", package: pack });
   } catch (err) {
