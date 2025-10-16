@@ -75,6 +75,7 @@ router.post("/", protectRoute, async (req, res) => {
     const {
       name,
       description,
+      itemType,
       originalPrice,
       discountedPrice,
       stock,
@@ -103,7 +104,7 @@ router.post("/", protectRoute, async (req, res) => {
   dietaryTypes,
   image: imageUrl || undefined,
   company: req.user._id,
-itemType: itemType || "food",
+    itemType: itemType || "food",
   isAvailable: true,
 });
 
@@ -165,6 +166,27 @@ router.delete("/:id", protectRoute, async (req, res) => {
     res.json({ message: "Food deleted successfully" });
   } catch (error) {
     console.error("Error deleting food:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+/* =========================================================================
+   🍽️ GET SINGLE FOOD DETAILS
+   ========================================================================= */
+router.get("/:id", protectRoute, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const food = await Food.findById(id).populate(
+      "company",
+      "username companyName companyAddress profileImage"
+    );
+
+    if (!food) return res.status(404).json({ message: "Food not found" });
+
+    res.json({ food });
+  } catch (error) {
+    console.error("Error fetching food details:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
