@@ -276,12 +276,23 @@ router.post("/:id/verify-code", protectRoute, async (req, res) => {
 
     const { code } = req.body;
     if (!code) return res.status(400).json({ message: "Code required" });
+    
+    // PIN format kontrolü
+    if (!/^\d{6}$/.test(code)) {
+      return res.status(400).json({ message: "Code must be exactly 6 digits" });
+    }
+
+    // PIN üretilmiş mi kontrol et
+    if (!order.pickupCodeHash || !order.codeGeneratedAt) {
+      return res.status(400).json({ message: "No pickup code generated for this order yet" });
+    }
 
     const expired = Date.now() - new Date(order.codeGeneratedAt).getTime() > 20000;
     if (expired) return res.status(400).json({ message: "Code expired. Wait for next rotation." });
 
+    // PIN sadece bu order için geçerli - hash kontrolü
     const valid = await isValidCode(code, order.pickupCodeHash);
-    if (!valid) return res.status(400).json({ message: "Invalid code" });
+    if (!valid) return res.status(400).json({ message: "Invalid code for this order" });
 
     order.status = "picked";
     await order.save();
@@ -315,6 +326,7 @@ router.get("/:id/code", protectRoute, async (req, res) => {
       console.log("Generating new PIN - no existing code");
       const { plain, hash } = await generateHashedCode();
       order.pickupCodeHash = hash;
+      order.pickupCodePlain = plain; // Plaintext PIN'i de sakla
       order.codeGeneratedAt = new Date();
       await order.save();
       console.log("New PIN generated:", plain);
@@ -330,6 +342,7 @@ router.get("/:id/code", protectRoute, async (req, res) => {
       console.log("PIN expired, generating new one");
       const { plain, hash } = await generateHashedCode();
       order.pickupCodeHash = hash;
+      order.pickupCodePlain = plain; // Plaintext PIN'i de sakla
       order.codeGeneratedAt = new Date();
       await order.save();
       console.log("New PIN generated after expiry:", plain);
@@ -344,7 +357,7 @@ router.get("/:id/code", protectRoute, async (req, res) => {
     const remainingTime = 20000 - (Date.now() - new Date(order.codeGeneratedAt).getTime());
     console.log("PIN still valid, remaining time:", remainingTime);
     return res.json({ 
-      pickupCode: "••••••", // PIN'i gizle
+      pickupCode: order.pickupCodePlain, // Gerçek PIN'i göster
       codeGeneratedAt: order.codeGeneratedAt,
       expiresIn: Math.max(0, remainingTime)
     });

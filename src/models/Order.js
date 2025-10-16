@@ -14,10 +14,13 @@ const orderSchema = new mongoose.Schema({
   totalAmount: { type: Number, required: true },
 
   // hashed pickup code (PIN)
-  pickupCodeHash: { type: String, required: true },
+  pickupCodeHash: { type: String, required: false },
+
+  // plaintext pickup code (PIN) - customer'a gösterilecek
+  pickupCodePlain: { type: String, required: false },
 
   // kodun üretildiği zaman
-  codeGeneratedAt: { type: Date, required: true },
+  codeGeneratedAt: { type: Date, required: false },
 
   // sipariş durumu
   status: {
