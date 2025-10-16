@@ -256,6 +256,39 @@ router.post("/:id/rate", protectRoute, async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
+/* =========================================================================
+   🧾 RESERVE PACKAGE STOCK
+   ========================================================================= */
+router.put("/:id/reserve", protectRoute, async (req, res) => {
+  try {
+    const { quantity } = req.body;
+
+    const pack = await Package.findById(req.params.id);
+    if (!pack) return res.status(404).json({ message: "Package not found" });
+
+    // stok kontrolü
+    if (quantity > pack.stock)
+      return res.status(400).json({ message: "Not enough stock available." });
+
+    // stoktan 1 düş
+    pack.stock = pack.stock - 1;
+    await pack.save();
+
+    // 10 dakika sonra iade et (rezervasyon süresi)
+    setTimeout(async () => {
+      const item = await Package.findById(req.params.id);
+      if (item) {
+        item.stock = item.stock + 1;
+        await item.save();
+      }
+    }, 10 * 60 * 1000);
+
+    res.json({ message: "Stock reserved successfully", package: pack });
+  } catch (err) {
+    console.error("Reserve error:", err);
+    res.status(500).json({ message: "Unable to reserve stock for this package." });
+  }
+});
 
 /* =========================================================================
    🧾 GET SINGLE ITEM DETAILS (Food + Package unified)
