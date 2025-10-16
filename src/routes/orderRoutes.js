@@ -20,23 +20,17 @@ router.post("/", protectRoute, async (req, res) => {
       return res.status(400).json({ message: "Missing required fields" });
     }
 
-    // 10 saniyelik ilk kodu oluştur
-    const { plain, hash } = await generateHashedCode();
-
     const order = await Order.create({
       customer: req.user._id,
       company,
       items,
       totalAmount,
-      pickupCodeHash: hash,
-      codeGeneratedAt: new Date(),
       status: "confirmed",
     });
 
     res.status(201).json({
       message: "Order created successfully",
       orderId: order._id,
-      pickupCode: plain, // sadece backend tarafında görülebilir
       createdAt: order.createdAt,
     });
   } catch (err) {
@@ -46,7 +40,7 @@ router.post("/", protectRoute, async (req, res) => {
 });
 
 /* =========================================================================
-   👤 GET MY ORDERS (CUSTOMER)
+   👤 GET MY ORDERS (CUSTOMER) - Confirmed orders only
    ========================================================================= */
 router.get("/my", protectRoute, async (req, res) => {
   try {
@@ -56,15 +50,40 @@ router.get("/my", protectRoute, async (req, res) => {
 
    const orders = await Order.find({
       customer: req.user._id,
-      status: "confirmed", // ✅ sadece tamamlanmış siparişleri getir
+      status: "confirmed", // ✅ sadece confirmed siparişleri getir
     })
       .populate("company", "companyName username")
       .populate("items.package", "name price")
+      .populate("items.food", "name price")
       .sort({ createdAt: -1 });
 
     res.json(orders);
   } catch (err) {
     console.error("Fetch my orders error:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+/* =========================================================================
+   👤 GET ALL MY ORDERS (CUSTOMER) - All statuses
+   ========================================================================= */
+router.get("/my/all", protectRoute, async (req, res) => {
+  try {
+    if (req.user.role !== "customer") {
+      return res.status(403).json({ message: "Only customers can view their orders" });
+    }
+
+    const orders = await Order.find({
+      customer: req.user._id,
+    })
+      .populate("company", "companyName username")
+      .populate("items.package", "name price")
+      .populate("items.food", "name price")
+      .sort({ createdAt: -1 });
+
+    res.json(orders);
+  } catch (err) {
+    console.error("Fetch all my orders error:", err);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -273,24 +292,62 @@ router.post("/:id/verify-code", protectRoute, async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
-// ✅ get current pickup code (customer only)
+// ✅ get current pickup code (customer only) - sadece customer istediğinde üret
 router.get("/:id/code", protectRoute, async (req, res) => {
   try {
+    console.log("PIN request for order:", req.params.id, "by user:", req.user._id);
+    
     const order = await Order.findById(req.params.id);
-    if (!order) return res.status(404).json({ message: "Order not found" });
-    if (req.user.role !== "customer" || String(order.customer) !== String(req.user._id))
+    if (!order) {
+      console.log("Order not found:", req.params.id);
+      return res.status(404).json({ message: "Order not found" });
+    }
+    
+    if (req.user.role !== "customer" || String(order.customer) !== String(req.user._id)) {
+      console.log("Not authorized - role:", req.user.role, "customer:", order.customer);
       return res.status(403).json({ message: "Not authorized" });
+    }
 
-    const expired = Date.now() - new Date(order.codeGeneratedAt).getTime() > 20000;
-    if (expired) {
+    console.log("Order found, status:", order.status, "hasCode:", !!order.pickupCodeHash);
+
+    // Eğer PIN henüz üretilmemişse veya süresi dolmuşsa yeni PIN üret
+    if (!order.pickupCodeHash || !order.codeGeneratedAt) {
+      console.log("Generating new PIN - no existing code");
       const { plain, hash } = await generateHashedCode();
       order.pickupCodeHash = hash;
       order.codeGeneratedAt = new Date();
       await order.save();
-      return res.json({ pickupCode: plain });
+      console.log("New PIN generated:", plain);
+      return res.json({ 
+        pickupCode: plain,
+        codeGeneratedAt: order.codeGeneratedAt,
+        expiresIn: 20000 // 20 saniye
+      });
     }
 
-    res.json({ pickupCode: "••••••" }); // veya hashed'ten değil, plaintext'ten dön
+    const expired = Date.now() - new Date(order.codeGeneratedAt).getTime() > 20000;
+    if (expired) {
+      console.log("PIN expired, generating new one");
+      const { plain, hash } = await generateHashedCode();
+      order.pickupCodeHash = hash;
+      order.codeGeneratedAt = new Date();
+      await order.save();
+      console.log("New PIN generated after expiry:", plain);
+      return res.json({ 
+        pickupCode: plain,
+        codeGeneratedAt: order.codeGeneratedAt,
+        expiresIn: 20000
+      });
+    }
+
+    // PIN hala geçerli, süreyi hesapla
+    const remainingTime = 20000 - (Date.now() - new Date(order.codeGeneratedAt).getTime());
+    console.log("PIN still valid, remaining time:", remainingTime);
+    return res.json({ 
+      pickupCode: "••••••", // PIN'i gizle
+      codeGeneratedAt: order.codeGeneratedAt,
+      expiresIn: Math.max(0, remainingTime)
+    });
   } catch (err) {
     console.error("Code fetch error:", err);
     res.status(500).json({ message: "Internal server error" });
