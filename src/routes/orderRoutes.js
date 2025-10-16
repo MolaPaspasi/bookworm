@@ -356,6 +356,23 @@ router.get("/:id/code", protectRoute, async (req, res) => {
     // PIN hala geçerli, süreyi hesapla
     const remainingTime = 20000 - (Date.now() - new Date(order.codeGeneratedAt).getTime());
     console.log("PIN still valid, remaining time:", remainingTime);
+    console.log("pickupCodePlain:", order.pickupCodePlain);
+    
+    // Eğer pickupCodePlain yoksa yeni PIN üret
+    if (!order.pickupCodePlain) {
+      console.log("pickupCodePlain missing, generating new PIN");
+      const { plain, hash } = await generateHashedCode();
+      order.pickupCodeHash = hash;
+      order.pickupCodePlain = plain;
+      order.codeGeneratedAt = new Date();
+      await order.save();
+      return res.json({ 
+        pickupCode: plain,
+        codeGeneratedAt: order.codeGeneratedAt,
+        expiresIn: 20000
+      });
+    }
+    
     return res.json({ 
       pickupCode: order.pickupCodePlain, // Gerçek PIN'i göster
       codeGeneratedAt: order.codeGeneratedAt,
