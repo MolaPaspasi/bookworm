@@ -297,7 +297,31 @@ router.post("/:id/verify-code", protectRoute, async (req, res) => {
     order.status = "picked";
     await order.save();
 
-    res.json({ message: "✅ Code verified successfully, order marked as picked" });
+    // Company'ye order detaylarını döndür
+    await order.populate([
+      { path: 'customer', select: 'name email phone' },
+      { path: 'items.package', select: 'name price' },
+      { path: 'items.food', select: 'name price' }
+    ]);
+
+    res.json({ 
+      message: "✅ Code verified successfully, order marked as picked",
+      order: {
+        id: order._id,
+        customer: {
+          name: order.customer.name,
+          email: order.customer.email,
+          phone: order.customer.phone
+        },
+        items: order.items.map(item => ({
+          name: item.package?.name || item.food?.name,
+          price: item.package?.price || item.food?.price,
+          quantity: item.quantity
+        })),
+        totalAmount: order.totalAmount,
+        createdAt: order.createdAt
+      }
+    });
   } catch (err) {
     console.error("Verify code error:", err);
     res.status(500).json({ message: "Internal server error" });
@@ -319,63 +343,21 @@ router.get("/:id/code", protectRoute, async (req, res) => {
       return res.status(403).json({ message: "Not authorized" });
     }
 
-    console.log("Order found, status:", order.status, "hasCode:", !!order.pickupCodeHash);
+    console.log("Order found, status:", order.status);
 
-    // Eğer PIN henüz üretilmemişse veya süresi dolmuşsa yeni PIN üret
-    if (!order.pickupCodeHash || !order.codeGeneratedAt) {
-      console.log("Generating new PIN - no existing code");
-      const { plain, hash } = await generateHashedCode();
-      order.pickupCodeHash = hash;
-      order.pickupCodePlain = plain; // Plaintext PIN'i de sakla
-      order.codeGeneratedAt = new Date();
-      await order.save();
-      console.log("New PIN generated:", plain);
-      return res.json({ 
-        pickupCode: plain,
-        codeGeneratedAt: order.codeGeneratedAt,
-        expiresIn: 20000 // 20 saniye
-      });
-    }
-
-    const expired = Date.now() - new Date(order.codeGeneratedAt).getTime() > 20000;
-    if (expired) {
-      console.log("PIN expired, generating new one");
-      const { plain, hash } = await generateHashedCode();
-      order.pickupCodeHash = hash;
-      order.pickupCodePlain = plain; // Plaintext PIN'i de sakla
-      order.codeGeneratedAt = new Date();
-      await order.save();
-      console.log("New PIN generated after expiry:", plain);
-      return res.json({ 
-        pickupCode: plain,
-        codeGeneratedAt: order.codeGeneratedAt,
-        expiresIn: 20000
-      });
-    }
-
-    // PIN hala geçerli, süreyi hesapla
-    const remainingTime = 20000 - (Date.now() - new Date(order.codeGeneratedAt).getTime());
-    console.log("PIN still valid, remaining time:", remainingTime);
-    
-    // Eğer pickupCodePlain yoksa yeni PIN üret (eski order'lar için)
-    if (!order.pickupCodePlain) {
-      console.log("pickupCodePlain missing, generating new PIN");
-      const { plain, hash } = await generateHashedCode();
-      order.pickupCodeHash = hash;
-      order.pickupCodePlain = plain;
-      order.codeGeneratedAt = new Date();
-      await order.save();
-      return res.json({ 
-        pickupCode: plain,
-        codeGeneratedAt: order.codeGeneratedAt,
-        expiresIn: 20000
-      });
-    }
+    // Her PIN request'inde yeni PIN üret - güvenlik için
+    console.log("Generating new PIN for security");
+    const { plain, hash } = await generateHashedCode();
+    order.pickupCodeHash = hash;
+    order.pickupCodePlain = plain;
+    order.codeGeneratedAt = new Date();
+    await order.save();
+    console.log("New PIN generated:", plain);
     
     return res.json({ 
-      pickupCode: order.pickupCodePlain, // Gerçek PIN'i göster
+      pickupCode: plain,
       codeGeneratedAt: order.codeGeneratedAt,
-      expiresIn: Math.max(0, remainingTime)
+      expiresIn: 20000 // 20 saniye
     });
   } catch (err) {
     console.error("Code fetch error:", err);
