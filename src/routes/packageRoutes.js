@@ -97,6 +97,7 @@ router.post("/", protectRoute, async (req, res) => {
       allergens = [],
       dietaryTypes = [],
       image,
+      
     } = req.body;
 
     if (!name || !originalPrice || !discountedPrice || !itemType) {
@@ -112,19 +113,20 @@ router.post("/", protectRoute, async (req, res) => {
     const Model = itemType === "food" ? Food : Package;
 
     const newItem = await Model.create({
-      name,
-      description,
-      itemType,
-      mealType,
-      originalPrice,
-      discountedPrice,
-      stock: typeof stock === "number" ? stock : 0,
-      allergens,
-      dietaryTypes,
-      image: imageUrl || undefined,
-      company: req.user._id,
-      isAvailable: true,
-    });
+  name,
+  description,
+  itemType: itemType || "package",
+  mealType,
+  originalPrice,
+  discountedPrice,
+  stock: typeof stock === "number" ? stock : 0,
+  allergens,
+  dietaryTypes,
+  image: imageUrl || undefined,
+  company: req.user._id,
+  isAvailable: true,
+});
+
 
     await newItem.populate("company", "username companyName companyAddress");
     res.status(201).json(newItem);

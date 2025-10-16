@@ -94,17 +94,18 @@ router.post("/", protectRoute, async (req, res) => {
     }
 
     const food = await Food.create({
-      name,
-      description,
-      originalPrice,
-      discountedPrice,
-      stock: typeof stock === "number" ? stock : 0,
-      allergens,
-      dietaryTypes,
-      image: imageUrl || undefined,
-      company: req.user._id,
-      isAvailable: true,
-    });
+  name,
+  description,
+  originalPrice,
+  discountedPrice,
+  stock: typeof stock === "number" ? stock : 0,
+  allergens,
+  dietaryTypes,
+  image: imageUrl || undefined,
+  company: req.user._id,
+itemType: itemType || "food",
+  isAvailable: true,
+});
 
     await food.populate("company", "username companyName companyAddress");
     res.status(201).json(food);
