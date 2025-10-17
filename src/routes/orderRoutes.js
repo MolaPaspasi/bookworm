@@ -247,22 +247,29 @@ router.post("/:id/feedback", protectRoute, async (req, res) => {
     if (order.status !== "picked")
       return res.status(400).json({ message: "You can only rate picked orders" });
 
+    // 1 hafta süre kontrolü
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+    
+    if (new Date(order.createdAt) < oneWeekAgo) {
+      return res.status(400).json({ 
+        message: "Feedback period has expired. You can only leave feedback within 1 week of order completion." 
+      });
+    }
+
     // zaten feedback bırakmış mı?
     const existing = await Rating.findOne({ order: order._id, customer: req.user._id });
     if (existing)
-      return res.status(400).json({ message: "Feedback already submitted" });
+      return res.status(400).json({ message: "Feedback already submitted for this order" });
 
-    // her package için rating oluştur
-    for (const item of order.items) {
-      await Rating.create({
-        order: order._id,
-        customer: req.user._id,
-        company: order.company._id,
-        package: item.package._id,
-        rating,
-        comment,
-      });
-    }
+    // Order-based rating oluştur (package-based değil)
+    await Rating.create({
+      order: order._id,
+      customer: req.user._id,
+      company: order.company._id,
+      rating,
+      comment: comment || undefined,
+    });
 
     order.status = "completed";
     await order.save();
