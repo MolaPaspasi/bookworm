@@ -291,6 +291,26 @@ router.post("/:id/feedback", protectRoute, async (req, res) => {
   }
 });
 /* =========================================================================
+   📋 GET COMPANY FEEDBACKS
+   ========================================================================= */
+router.get("/my/feedbacks", protectRoute, async (req, res) => {
+  try {
+    if (req.user.role !== "company")
+      return res.status(403).json({ message: "Only companies can view feedbacks" });
+
+    const ratings = await Rating.find({ company: req.user._id })
+      .populate("customer", "name username email")
+      .populate("order", "createdAt totalAmount items")
+      .sort({ createdAt: -1 });
+
+    res.json(ratings);
+  } catch (err) {
+    console.error("Get feedbacks error:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+/* =========================================================================
    💬 COMPANY REPLY TO FEEDBACK
    ========================================================================= */
 router.post("/:id/reply", protectRoute, async (req, res) => {
