@@ -98,15 +98,57 @@ router.get("/my/history", protectRoute, async (req, res) => {
 
     const orders = await Order.find({
       customer: req.user._id,
-      status: "completed", // ✅ sadece tamamlanmış siparişleri getir
+      status: { $in: ["picked", "completed"] }, // ✅ hem picked hem completed siparişleri getir
     })
       .populate("company", "companyName username")
       .populate("items.package", "name price")
+      .populate("items.food", "name price")
       .sort({ createdAt: -1 });
 
+    console.log(`Found ${orders.length} history orders for customer ${req.user._id}`);
     res.json(orders);
   } catch (err) {
     console.error("Fetch customer completed orders error:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+/* =========================================================================
+   🔍 DEBUG: GET ALL CUSTOMER ORDERS (for debugging)
+   ========================================================================= */
+router.get("/my/debug", protectRoute, async (req, res) => {
+  try {
+    if (req.user.role !== "customer") {
+      return res.status(403).json({ message: "Only customers can view debug info" });
+    }
+
+    const allOrders = await Order.find({
+      customer: req.user._id,
+    })
+      .populate("company", "companyName username")
+      .populate("items.package", "name price")
+      .populate("items.food", "name price")
+      .sort({ createdAt: -1 });
+
+    const statusCounts = allOrders.reduce((acc, order) => {
+      acc[order.status] = (acc[order.status] || 0) + 1;
+      return acc;
+    }, {});
+
+    res.json({
+      totalOrders: allOrders.length,
+      statusCounts,
+      orders: allOrders.map(order => ({
+        id: order._id,
+        status: order.status,
+        createdAt: order.createdAt,
+        totalAmount: order.totalAmount,
+        company: order.company?.companyName || order.company?.username,
+        itemsCount: order.items.length
+      }))
+    });
+  } catch (err) {
+    console.error("Debug orders error:", err);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -291,8 +333,48 @@ router.post("/:id/verify-code", protectRoute, async (req, res) => {
     if (expired) return res.status(400).json({ message: "Code expired. Wait for next rotation." });
 
     // PIN sadece bu order için geçerli - hash kontrolü
+    console.log("🔍 Verifying code:", code, "for order:", order._id);
+    console.log("📋 Order details:");
+    console.log("  - Has pickupCodeHash:", !!order.pickupCodeHash);
+    console.log("  - Has pickupCodePlain:", !!order.pickupCodePlain);
+    console.log("  - Code generated at:", order.codeGeneratedAt);
+    console.log("  - Current time:", new Date().toISOString());
+    console.log("  - Time difference:", Date.now() - new Date(order.codeGeneratedAt).getTime(), "ms");
+    
+    // Debug: Show the stored plain code for comparison
+    if (order.pickupCodePlain) {
+      console.log("🔑 Stored plain code:", order.pickupCodePlain);
+      console.log("🔑 Input code:", code);
+      console.log("🔑 Codes match (plain):", order.pickupCodePlain === code);
+    }
+    
+    // Try hash validation first
     const valid = await isValidCode(code, order.pickupCodeHash);
-    if (!valid) return res.status(400).json({ message: "Invalid code for this order" });
+    console.log("✅ Hash validation result:", valid);
+    
+    // Fallback: Check plain text if hash validation fails
+    let isValid = valid;
+    if (!valid && order.pickupCodePlain) {
+      isValid = order.pickupCodePlain === code;
+      console.log("🔄 Fallback plain text validation result:", isValid);
+    }
+    
+    if (!isValid) {
+      console.log("❌ Code validation failed for order:", order._id);
+      console.log("💡 Debug info: Check if code rotation service overwrote the code");
+      return res.status(400).json({ 
+        message: "Invalid code for this order",
+        debug: {
+          orderId: order._id,
+          hasHash: !!order.pickupCodeHash,
+          hasPlain: !!order.pickupCodePlain,
+          codeGeneratedAt: order.codeGeneratedAt,
+          timeSinceGeneration: Date.now() - new Date(order.codeGeneratedAt).getTime(),
+          storedPlainCode: order.pickupCodePlain,
+          inputCode: code
+        }
+      });
+    }
 
     order.status = "picked";
     await order.save();
@@ -303,6 +385,10 @@ router.post("/:id/verify-code", protectRoute, async (req, res) => {
       { path: 'items.package', select: 'name price' },
       { path: 'items.food', select: 'name price' }
     ]);
+
+    // Customer'a bildirim gönder (WebSocket veya push notification)
+    // Şimdilik sadece log, sonra WebSocket ekleyebiliriz
+    console.log(`📱 Customer notification: Order ${order._id} picked up by customer ${order.customer.name}`);
 
     res.json({ 
       message: "✅ Code verified successfully, order marked as picked",
@@ -343,24 +429,88 @@ router.get("/:id/code", protectRoute, async (req, res) => {
       return res.status(403).json({ message: "Not authorized" });
     }
 
-    console.log("Order found, status:", order.status);
+    console.log("Order found, status:", order.status, "hasCode:", !!order.pickupCodeHash);
 
-    // Her PIN request'inde yeni PIN üret - güvenlik için
-    console.log("Generating new PIN for security");
-    const { plain, hash } = await generateHashedCode();
-    order.pickupCodeHash = hash;
-    order.pickupCodePlain = plain;
-    order.codeGeneratedAt = new Date();
-    await order.save();
-    console.log("New PIN generated:", plain);
+    // Eğer PIN henüz üretilmemişse veya süresi dolmuşsa yeni PIN üret
+    if (!order.pickupCodeHash || !order.codeGeneratedAt) {
+      console.log("Generating new PIN - no existing code");
+      const { plain, hash } = await generateHashedCode();
+      order.pickupCodeHash = hash;
+      order.pickupCodePlain = plain;
+      order.codeGeneratedAt = new Date();
+      await order.save();
+      console.log("New PIN generated:", plain);
+      return res.json({ 
+        pickupCode: plain,
+        codeGeneratedAt: order.codeGeneratedAt,
+        expiresIn: 20000 // 20 saniye
+      });
+    }
+
+    const expired = Date.now() - new Date(order.codeGeneratedAt).getTime() > 20000;
+    if (expired) {
+      console.log("PIN expired, generating new one");
+      const { plain, hash } = await generateHashedCode();
+      order.pickupCodeHash = hash;
+      order.pickupCodePlain = plain;
+      order.codeGeneratedAt = new Date();
+      await order.save();
+      console.log("New PIN generated after expiry:", plain);
+      return res.json({ 
+        pickupCode: plain,
+        codeGeneratedAt: order.codeGeneratedAt,
+        expiresIn: 20000
+      });
+    }
+
+    // PIN hala geçerli, süreyi hesapla
+    const remainingTime = 20000 - (Date.now() - new Date(order.codeGeneratedAt).getTime());
+    console.log("PIN still valid, remaining time:", remainingTime);
     
     return res.json({ 
-      pickupCode: plain,
+      pickupCode: order.pickupCodePlain, // Mevcut PIN'i göster
       codeGeneratedAt: order.codeGeneratedAt,
-      expiresIn: 20000 // 20 saniye
+      expiresIn: Math.max(0, remainingTime)
     });
   } catch (err) {
     console.error("Code fetch error:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+/* =========================================================================
+   🔍 DEBUG: GET ORDER PIN INFO (for debugging)
+   ========================================================================= */
+router.get("/:id/pin-debug", protectRoute, async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ message: "Order not found" });
+
+    // Only allow company or customer to see their own order's PIN debug info
+    if (req.user.role === "company" && String(req.user._id) !== String(order.company)) {
+      return res.status(403).json({ message: "Not authorized" });
+    }
+    if (req.user.role === "customer" && String(req.user._id) !== String(order.customer)) {
+      return res.status(403).json({ message: "Not authorized" });
+    }
+
+    const timeSinceGeneration = order.codeGeneratedAt ? 
+      Date.now() - new Date(order.codeGeneratedAt).getTime() : null;
+    const isExpired = timeSinceGeneration ? timeSinceGeneration > 20000 : null;
+
+    res.json({
+      orderId: order._id,
+      status: order.status,
+      hasPickupCodeHash: !!order.pickupCodeHash,
+      hasPickupCodePlain: !!order.pickupCodePlain,
+      codeGeneratedAt: order.codeGeneratedAt,
+      timeSinceGeneration,
+      isExpired,
+      plainCode: order.pickupCodePlain, // Only for debugging
+      hashPrefix: order.pickupCodeHash ? order.pickupCodeHash.substring(0, 10) + "..." : null
+    });
+  } catch (err) {
+    console.error("PIN debug error:", err);
     res.status(500).json({ message: "Internal server error" });
   }
 });

@@ -7,7 +7,6 @@ import orderRoutes from "./routes/orderRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
 import packageRoutes from "./routes/packageRoutes.js";
 import { connectDB } from "./lib/db.js";
-import { startCodeRotation } from "./services/codeRotationService.js";
 import foodRoutes from "./routes/foodRoutes.js";
 
 const app = express();
@@ -24,7 +23,6 @@ app.use("/api/payment", paymentRoutes); // Register the foods route
 app.use("/api/orders", orderRoutes); // Register the orders route
 app.use("/api/foods", foodRoutes);
 
-startCodeRotation();
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
