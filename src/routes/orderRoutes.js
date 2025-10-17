@@ -304,115 +304,6 @@ router.post("/:id/reply", protectRoute, async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
-/* =========================================================================
-   ✅ VERIFY CODE (COMPANY ONLY)
-   ========================================================================= */
-router.post("/:id/verify-code", protectRoute, async (req, res) => {
-  try {
-    const order = await Order.findById(req.params.id);
-    if (!order) return res.status(404).json({ message: "Order not found" });
-
-    if (req.user.role !== "company" || String(req.user._id) !== String(order.company)) {
-      return res.status(403).json({ message: "Not authorized to verify this order" });
-    }
-
-    const { code } = req.body;
-    if (!code) return res.status(400).json({ message: "Code required" });
-    
-    // PIN format kontrolü
-    if (!/^\d{6}$/.test(code)) {
-      return res.status(400).json({ message: "Code must be exactly 6 digits" });
-    }
-
-    // PIN üretilmiş mi kontrol et
-    if (!order.pickupCodeHash || !order.codeGeneratedAt) {
-      return res.status(400).json({ message: "No pickup code generated for this order yet" });
-    }
-
-    const expired = Date.now() - new Date(order.codeGeneratedAt).getTime() > 20000;
-    if (expired) return res.status(400).json({ message: "Code expired. Wait for next rotation." });
-
-    // PIN sadece bu order için geçerli - hash kontrolü
-    console.log("🔍 Verifying code:", code, "for order:", order._id);
-    console.log("📋 Order details:");
-    console.log("  - Has pickupCodeHash:", !!order.pickupCodeHash);
-    console.log("  - Has pickupCodePlain:", !!order.pickupCodePlain);
-    console.log("  - Code generated at:", order.codeGeneratedAt);
-    console.log("  - Current time:", new Date().toISOString());
-    console.log("  - Time difference:", Date.now() - new Date(order.codeGeneratedAt).getTime(), "ms");
-    
-    // Debug: Show the stored plain code for comparison
-    if (order.pickupCodePlain) {
-      console.log("🔑 Stored plain code:", order.pickupCodePlain);
-      console.log("🔑 Input code:", code);
-      console.log("🔑 Codes match (plain):", order.pickupCodePlain === code);
-    }
-    
-    // Try hash validation first
-    const valid = await isValidCode(code, order.pickupCodeHash);
-    console.log("✅ Hash validation result:", valid);
-    
-    // Fallback: Check plain text if hash validation fails
-    let isValid = valid;
-    if (!valid && order.pickupCodePlain) {
-      isValid = order.pickupCodePlain === code;
-      console.log("🔄 Fallback plain text validation result:", isValid);
-    }
-    
-    if (!isValid) {
-      console.log("❌ Code validation failed for order:", order._id);
-      console.log("💡 Debug info: Check if code rotation service overwrote the code");
-      return res.status(400).json({ 
-        message: "Invalid code for this order",
-        debug: {
-          orderId: order._id,
-          hasHash: !!order.pickupCodeHash,
-          hasPlain: !!order.pickupCodePlain,
-          codeGeneratedAt: order.codeGeneratedAt,
-          timeSinceGeneration: Date.now() - new Date(order.codeGeneratedAt).getTime(),
-          storedPlainCode: order.pickupCodePlain,
-          inputCode: code
-        }
-      });
-    }
-
-    order.status = "picked";
-    await order.save();
-
-    // Company'ye order detaylarını döndür
-    await order.populate([
-      { path: 'customer', select: 'name email phone' },
-      { path: 'items.package', select: 'name price' },
-      { path: 'items.food', select: 'name price' }
-    ]);
-
-    // Customer'a bildirim gönder (WebSocket veya push notification)
-    // Şimdilik sadece log, sonra WebSocket ekleyebiliriz
-    console.log(`📱 Customer notification: Order ${order._id} picked up by customer ${order.customer.name}`);
-
-    res.json({ 
-      message: "✅ Code verified successfully, order marked as picked",
-      order: {
-        id: order._id,
-        customer: {
-          name: order.customer.name,
-          email: order.customer.email,
-          phone: order.customer.phone
-        },
-        items: order.items.map(item => ({
-          name: item.package?.name || item.food?.name,
-          price: item.package?.price || item.food?.price,
-          quantity: item.quantity
-        })),
-        totalAmount: order.totalAmount,
-        createdAt: order.createdAt
-      }
-    });
-  } catch (err) {
-    console.error("Verify code error:", err);
-    res.status(500).json({ message: "Internal server error" });
-  }
-});
 // ✅ get current pickup code (customer only) - sadece customer istediğinde üret
 router.get("/:id/code", protectRoute, async (req, res) => {
   try {
@@ -474,6 +365,98 @@ router.get("/:id/code", protectRoute, async (req, res) => {
     });
   } catch (err) {
     console.error("Code fetch error:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+/* =========================================================================
+   🔑 VERIFY PIN (COMPANY ONLY) - Find order by PIN and verify
+   ========================================================================= */
+router.post("/verify-pin", protectRoute, async (req, res) => {
+  try {
+    if (req.user.role !== "company") {
+      return res.status(403).json({ message: "Only companies can verify PINs" });
+    }
+
+    const { code } = req.body;
+    if (!code) return res.status(400).json({ message: "Code required" });
+    
+    // PIN format kontrolü
+    if (!/^\d{6}$/.test(code)) {
+      return res.status(400).json({ message: "Code must be exactly 6 digits" });
+    }
+
+    // Bu company'nin tüm aktif order'larını bul
+    const orders = await Order.find({
+      company: req.user._id,
+      status: { $in: ["confirmed", "ready"] }
+    })
+      .populate("customer", "name username email phone")
+      .populate("items.package", "name price")
+      .populate("items.food", "name price");
+
+    console.log(`🔍 Searching for PIN ${code} among ${orders.length} orders for company ${req.user._id}`);
+
+    let foundOrder = null;
+    let isValid = false;
+
+    // Her order için PIN kontrolü yap
+    for (const order of orders) {
+      if (!order.pickupCodeHash || !order.codeGeneratedAt) continue;
+
+      const expired = Date.now() - new Date(order.codeGeneratedAt).getTime() > 20000;
+      if (expired) continue;
+
+      // Hash validation
+      const valid = await isValidCode(code, order.pickupCodeHash);
+      if (valid) {
+        foundOrder = order;
+        isValid = true;
+        break;
+      }
+
+      // Fallback: plain text validation
+      if (order.pickupCodePlain && order.pickupCodePlain === code) {
+        foundOrder = order;
+        isValid = true;
+        break;
+      }
+    }
+
+    if (!foundOrder || !isValid) {
+      return res.status(400).json({ 
+        message: "This code is not valid or expired" 
+      });
+    }
+
+    // Order'ı picked olarak işaretle
+    foundOrder.status = "picked";
+    await foundOrder.save();
+
+    console.log(`✅ PIN ${code} verified for order ${foundOrder._id}, customer: ${foundOrder.customer.name || foundOrder.customer.username}`);
+
+    res.json({
+      success: true,
+      message: `✅ Code verified successfully! Give the items to ${foundOrder.customer.name || foundOrder.customer.username || 'the customer'}`,
+      order: {
+        id: foundOrder._id,
+        customer: {
+          name: foundOrder.customer.name || foundOrder.customer.username,
+          email: foundOrder.customer.email,
+          phone: foundOrder.customer.phone
+        },
+        items: foundOrder.items.map(item => ({
+          name: item.package?.name || item.food?.name,
+          price: item.package?.price || item.food?.price,
+          quantity: item.quantity
+        })),
+        totalAmount: foundOrder.totalAmount,
+        createdAt: foundOrder.createdAt
+      }
+    });
+
+  } catch (err) {
+    console.error("Verify PIN error:", err);
     res.status(500).json({ message: "Internal server error" });
   }
 });
