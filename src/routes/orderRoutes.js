@@ -263,13 +263,23 @@ router.post("/:id/feedback", protectRoute, async (req, res) => {
       return res.status(400).json({ message: "Feedback already submitted for this order" });
 
     // Order-based rating oluştur (package-based değil)
-    await Rating.create({
+    console.log("Creating rating with data:", {
       order: order._id,
       customer: req.user._id,
       company: order.company._id,
       rating,
       comment: comment || undefined,
     });
+    
+    const newRating = await Rating.create({
+      order: order._id,
+      customer: req.user._id,
+      company: order.company._id,
+      rating,
+      comment: comment || undefined,
+    });
+    
+    console.log("Rating created successfully:", newRating._id);
 
     order.status = "completed";
     await order.save();

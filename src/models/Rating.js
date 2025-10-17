@@ -5,16 +5,12 @@ const ratingSchema = new mongoose.Schema(
     food: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Food",
-      required: function () {
-        return !this.package;
-      },
+      required: false, // Artık opsiyonel, order-based rating için
     },
     package: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Package",
-      required: function () {
-        return !this.food;
-      },
+      required: false, // Artık opsiyonel, order-based rating için
     },
     customer: {
       type: mongoose.Schema.Types.ObjectId,
@@ -29,7 +25,7 @@ const ratingSchema = new mongoose.Schema(
     order: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Order",
-      required: false, // hangi order'dan geldiğini bilmek için
+      required: true, // Order-based rating için zorunlu
     },
     rating: {
       type: Number,
@@ -52,7 +48,13 @@ const ratingSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Ensure one rating per customer per item type
+// Ensure one rating per customer per order
+ratingSchema.index(
+  { order: 1, customer: 1 },
+  { unique: true }
+);
+
+// Legacy indexes for food/package ratings (if needed in future)
 ratingSchema.index(
   { food: 1, customer: 1 },
   { unique: true, partialFilterExpression: { food: { $exists: true } } }
