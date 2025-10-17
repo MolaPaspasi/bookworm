@@ -18,7 +18,7 @@ export const startCodeRotation = () => {
         if (!order.pickupCodeHash || hasExpiredCode) {
           const { plain, hash } = await generateHashedCode();
           order.pickupCodeHash = hash;
-          order.pickupCodePlain = plain; // Store plain text for customer display
+          // Plain PIN removed for security - only hash is stored
           order.codeGeneratedAt = new Date();
           await order.save();
 

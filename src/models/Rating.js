@@ -55,14 +55,15 @@ ratingSchema.index(
 );
 
 // Legacy indexes for food/package ratings (if needed in future)
-ratingSchema.index(
-  { food: 1, customer: 1 },
-  { unique: true, partialFilterExpression: { food: { $exists: true } } }
-);
-ratingSchema.index(
-  { package: 1, customer: 1 },
-  { unique: true, partialFilterExpression: { package: { $exists: true } } }
-);
+// Note: These indexes are disabled to prevent conflicts with order-based ratings
+// ratingSchema.index(
+//   { food: 1, customer: 1 },
+//   { unique: true, partialFilterExpression: { food: { $exists: true } } }
+// );
+// ratingSchema.index(
+//   { package: 1, customer: 1 },
+//   { unique: true, partialFilterExpression: { package: { $exists: true } } }
+// );
 
 // Add indexes for better performance
 ratingSchema.index({ food: 1 });

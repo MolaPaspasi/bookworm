@@ -3,6 +3,7 @@ import protectRoute from "../middleware/auth.middleware.js";
 import Order from "../models/Order.js";
 import { generateHashedCode, isValidCode } from "../utils/rotatingCode.js";
 import Rating from "../models/Rating.js";
+import User from "../models/User.js";
 
 const router = express.Router();
 
@@ -281,6 +282,17 @@ router.post("/:id/feedback", protectRoute, async (req, res) => {
     
     console.log("Rating created successfully:", newRating._id);
 
+    // Company rating'ini güncelle
+    const companyRatings = await Rating.find({ company: order.company._id });
+    if (companyRatings.length > 0) {
+      const avgRating = companyRatings.reduce((sum, r) => sum + r.rating, 0) / companyRatings.length;
+      await User.findByIdAndUpdate(order.company._id, {
+        averageRating: Math.round(avgRating * 10) / 10,
+        ratingCount: companyRatings.length,
+      });
+      console.log(`Company ${order.company._id} rating updated: ${avgRating.toFixed(1)} (${companyRatings.length} ratings)`);
+    }
+
     order.status = "completed";
     await order.save();
 
@@ -300,7 +312,20 @@ router.get("/my/feedbacks", protectRoute, async (req, res) => {
 
     const ratings = await Rating.find({ company: req.user._id })
       .populate("customer", "name username email")
-      .populate("order", "createdAt totalAmount items")
+      .populate({
+        path: "order",
+        select: "createdAt totalAmount items status",
+        populate: [
+          {
+            path: "items.package",
+            select: "name price"
+          },
+          {
+            path: "items.food", 
+            select: "name price"
+          }
+        ]
+      })
       .sort({ createdAt: -1 });
 
     res.json(ratings);
@@ -364,7 +389,6 @@ router.get("/:id/code", protectRoute, async (req, res) => {
       console.log("Generating new PIN - no existing code");
       const { plain, hash } = await generateHashedCode();
       order.pickupCodeHash = hash;
-      order.pickupCodePlain = plain;
       order.codeGeneratedAt = new Date();
       await order.save();
       console.log("New PIN generated:", plain);
@@ -380,7 +404,6 @@ router.get("/:id/code", protectRoute, async (req, res) => {
       console.log("PIN expired, generating new one");
       const { plain, hash } = await generateHashedCode();
       order.pickupCodeHash = hash;
-      order.pickupCodePlain = plain;
       order.codeGeneratedAt = new Date();
       await order.save();
       console.log("New PIN generated after expiry:", plain);
@@ -396,7 +419,7 @@ router.get("/:id/code", protectRoute, async (req, res) => {
     console.log("PIN still valid, remaining time:", remainingTime);
     
     return res.json({ 
-      pickupCode: order.pickupCodePlain, // Mevcut PIN'i göster
+      pickupCode: plain, // Yeni üretilen PIN'i göster
       codeGeneratedAt: order.codeGeneratedAt,
       expiresIn: Math.max(0, remainingTime)
     });
@@ -452,12 +475,7 @@ router.post("/verify-pin", protectRoute, async (req, res) => {
         break;
       }
 
-      // Fallback: plain text validation
-      if (order.pickupCodePlain && order.pickupCodePlain === code) {
-        foundOrder = order;
-        isValid = true;
-        break;
-      }
+      // Fallback validation removed for security
     }
 
     if (!foundOrder || !isValid) {
@@ -522,11 +540,11 @@ router.get("/:id/pin-debug", protectRoute, async (req, res) => {
       orderId: order._id,
       status: order.status,
       hasPickupCodeHash: !!order.pickupCodeHash,
-      hasPickupCodePlain: !!order.pickupCodePlain,
+      hasPickupCodePlain: false, // Removed for security
       codeGeneratedAt: order.codeGeneratedAt,
       timeSinceGeneration,
       isExpired,
-      plainCode: order.pickupCodePlain, // Only for debugging
+      plainCode: "REMOVED_FOR_SECURITY", // Plain PIN removed for security
       hashPrefix: order.pickupCodeHash ? order.pickupCodeHash.substring(0, 10) + "..." : null
     });
   } catch (err) {
