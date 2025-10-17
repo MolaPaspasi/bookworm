@@ -35,7 +35,7 @@ router.get("/", protectRoute, async (req, res) => {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
-      .populate("company", "username companyName companyAddress");
+      .populate("company", "username companyName companyAddress averageRating ratingCount");
 
     const totalPackages = await Package.countDocuments(query);
     res.json({

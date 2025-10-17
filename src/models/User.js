@@ -49,6 +49,18 @@ const userSchema = new mongoose.Schema(
         ref: "User",
       },
     ],
+    // Company rating fields
+    averageRating: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 5,
+    },
+    ratingCount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
   },
   { timestamps: true }
 );

@@ -303,7 +303,7 @@ router.post("/:id/feedback", protectRoute, async (req, res) => {
   }
 });
 /* =========================================================================
-   📋 GET COMPANY FEEDBACKS
+   📋 GET COMPANY FEEDBACKS (COMPANY ONLY)
    ========================================================================= */
 router.get("/my/feedbacks", protectRoute, async (req, res) => {
   try {
@@ -334,6 +334,7 @@ router.get("/my/feedbacks", protectRoute, async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
+
 
 /* =========================================================================
    💬 COMPANY REPLY TO FEEDBACK
@@ -549,6 +550,28 @@ router.get("/:id/pin-debug", protectRoute, async (req, res) => {
     });
   } catch (err) {
     console.error("PIN debug error:", err);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// GET /orders/company/:companyId/feedbacks - Get all feedbacks for a specific company (public)
+router.get("/company/:companyId/feedbacks", async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    console.log("🔍 Company feedbacks requested for companyId:", companyId);
+
+    const feedbacks = await Rating.find({ company: companyId })
+      .populate("customer", "name username")
+      .populate("order", "items totalAmount createdAt")
+      .populate("order.items.food", "name price")
+      .populate("order.items.package", "name price")
+      .sort({ createdAt: -1 });
+
+    console.log("📝 Found feedbacks:", feedbacks.length);
+    console.log("📝 Feedbacks data:", feedbacks);
+    res.json(feedbacks);
+  } catch (err) {
+    console.error("❌ Company feedbacks error:", err);
     res.status(500).json({ message: "Internal server error" });
   }
 });
