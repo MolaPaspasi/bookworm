@@ -10,6 +10,48 @@ import protectRoute from "../middleware/auth.middleware.js";
 const router = express.Router();
 
 /* =========================================================================
+   🏢 GET COMPANIES (for customer homepage)
+   Returns unique companies with their basic info and ratings
+   ========================================================================= */
+router.get("/companies", protectRoute, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    // Get all companies that have packages (filter out null values)
+    const companyIds = await Package.distinct("company", { company: { $ne: null } });
+    
+    const companies = await User.find({ 
+      role: "company",
+      _id: { $in: companyIds }
+    })
+    .select("username companyName companyAddress averageRating ratingCount")
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit);
+
+    // Get total count
+    const totalCompanies = await User.countDocuments({ 
+      role: "company",
+      _id: { $in: companyIds }
+    });
+
+    console.log(`📊 Found ${totalCompanies} companies, returning ${companies.length}`);
+
+    res.json({
+      companies,
+      currentPage: page,
+      totalCompanies,
+      totalPages: Math.ceil(totalCompanies / limit),
+    });
+  } catch (error) {
+    console.error("Error fetching companies:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+/* =========================================================================
    📦 LIST PACKAGES (for customers / search / filters)
    Supports: ?page, ?limit, ?company, ?search, ?itemType (food/mystery)
    ========================================================================= */
@@ -322,6 +364,79 @@ router.get("/:id", protectRoute, async (req, res) => {
     res.json({ package: item, ratings });
   } catch (error) {
     console.error("Error fetching package details:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+/* =========================================================================
+   🏢 GET COMPANIES (for customer homepage)
+   Returns unique companies with their packages and ratings
+   ========================================================================= */
+router.get("/companies", protectRoute, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    // Get all packages with company info
+    const packages = await Package.find({ isAvailable: true })
+      .populate("company", "username companyName companyAddress averageRating ratingCount")
+      .sort({ createdAt: -1 });
+
+    // Group packages by company
+    const companyMap = new Map();
+    
+    packages.forEach((pkg) => {
+      const companyId = pkg.company?._id;
+      if (!companyId) return;
+
+      if (!companyMap.has(companyId)) {
+        companyMap.set(companyId, {
+          _id: companyId,
+          companyName: pkg.company?.companyName || pkg.company?.username || "Restaurant",
+          companyAddress: pkg.company?.companyAddress || "Address not provided",
+          averageRating: pkg.company?.averageRating || 0,
+          ratingCount: pkg.company?.ratingCount || 0,
+          packages: [],
+          minPrice: null,
+          coverImage: null,
+        });
+      }
+
+      const entry = companyMap.get(companyId);
+      const price = Number(pkg.discountedPrice || pkg.originalPrice) || 0;
+      
+      entry.packages.push({
+        _id: pkg._id,
+        name: pkg.name,
+        description: pkg.description,
+        price,
+        image: pkg.image,
+        itemType: pkg.itemType,
+      });
+
+      entry.minPrice = entry.minPrice === null ? price : Math.min(entry.minPrice, price);
+      
+      if (!entry.coverImage && pkg.image) {
+        entry.coverImage = pkg.image;
+      }
+    });
+
+    // Convert to array and paginate
+    const companies = Array.from(companyMap.values());
+    const totalCompanies = companies.length;
+    const paginatedCompanies = companies.slice(skip, skip + limit);
+
+    console.log(`📊 Found ${totalCompanies} companies, returning ${paginatedCompanies.length}`);
+
+    res.json({
+      companies: paginatedCompanies,
+      currentPage: page,
+      totalCompanies,
+      totalPages: Math.ceil(totalCompanies / limit),
+    });
+  } catch (error) {
+    console.error("Error fetching companies:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
