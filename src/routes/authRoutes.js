@@ -215,5 +215,23 @@ router.get("/favorites", protectRoute, async (req, res) => {
   }
 });
 
+// GET /auth/company/:id - Get company details by ID (public)
+router.get("/company/:id", protectRoute, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const company = await User.findById(id)
+      .select("username companyName companyAddress averageRating ratingCount role");
+    
+    if (!company || company.role !== "company") {
+      return res.status(404).json({ message: "Company not found" });
+    }
+    
+    res.json(company);
+  } catch (error) {
+    console.error("Error fetching company:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 
 export default router;

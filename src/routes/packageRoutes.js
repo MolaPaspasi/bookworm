@@ -4,6 +4,7 @@ import Package from "../models/Package.js";
 import Food from "../models/Food.js";
 import Rating from "../models/Rating.js";
 import User from "../models/User.js";
+import Order from "../models/Order.js";
 import protectRoute from "../middleware/auth.middleware.js";
 
 const router = express.Router();
@@ -37,9 +38,35 @@ router.get("/", protectRoute, async (req, res) => {
       .limit(limit)
       .populate("company", "username companyName companyAddress averageRating ratingCount");
 
+    // Her package için rating bilgilerini hesapla (order-based rating'lerden)
+    const packagesWithRatings = await Promise.all(
+      packages.map(async (pkg) => {
+        // Bu package'ı içeren order'ları bul
+        const ordersWithPackage = await Order.find({
+          "items.package": pkg._id,
+          status: { $in: ["picked", "completed"] }
+        });
+        
+        // Bu order'ların rating'lerini bul
+        const orderIds = ordersWithPackage.map(order => order._id);
+        const ratings = await Rating.find({ order: { $in: orderIds } });
+        
+        const totalRating = ratings.reduce((sum, rating) => sum + rating.rating, 0);
+        const averageRating = ratings.length > 0 ? totalRating / ratings.length : 0;
+        
+        console.log(`Package ${pkg.name}: ${ratings.length} ratings, avg: ${averageRating.toFixed(1)}`);
+        
+        return {
+          ...pkg.toObject(),
+          averageRating: Math.round(averageRating * 10) / 10, // 1 decimal place
+          ratingCount: ratings.length
+        };
+      })
+    );
+
     const totalPackages = await Package.countDocuments(query);
     res.json({
-      packages,
+      packages: packagesWithRatings,
       currentPage: page,
       totalPackages,
       totalPages: Math.ceil(totalPackages / limit),
